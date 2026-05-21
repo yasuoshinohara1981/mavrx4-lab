@@ -1,8 +1,33 @@
 import * as THREE from 'three';
 
 /**
- * Scene2 共有ユーティリティ・シェーダー補助
+ * Scene10 共有ユーティリティ・シェーダー補助
  */
+
+/**
+ * 寿命終盤：フェード区間で不透明度 1→0（smoothstep）
+ */
+export function fadeOpacity01(elapsedMs, lifeMs, fadeOutMs) {
+    const fade = Math.min(fadeOutMs, lifeMs * 0.35);
+    const t0 = Math.max(0, lifeMs - fade);
+    if (elapsedMs <= t0) return 1;
+    if (elapsedMs >= lifeMs) return 0;
+    const t = (elapsedMs - t0) / (lifeMs - t0);
+    const eased = t * t * (3 - 2 * t);
+    return 1 - eased;
+}
+
+/**
+ * InstancedMesh 用：インスタンスごとの不透明度属性の付与
+ */
+export function attachInstanceOpacityAttribute(geometry, count) {
+    const a = new Float32Array(count);
+    a.fill(0);
+    const attr = new THREE.InstancedBufferAttribute(a, 1);
+    attr.setUsage(THREE.DynamicDrawUsage);
+    geometry.setAttribute('instanceOpacity', attr);
+    return attr;
+}
 
 /**
  * MIDI ベロシティの正規化

@@ -4,17 +4,25 @@
  */
 
 import { SceneBase } from '../scenes/SceneBase.js';
-import { Scene1 } from '../scenes/scene01/Scene1.js';
-import { Scene2 } from '../scenes/scene02/Scene2.js';
-import { Scene3 } from '../scenes/scene03/Scene3.js';
-import { Scene4 } from '../scenes/scene04/Scene4.js';
+import { Scene01 } from '../scenes/scene01/Scene01.js';
+import { Scene02 } from '../scenes/scene02/Scene02.js';
+import { Scene03 } from '../scenes/scene03/Scene03.js';
+import { Scene04 } from '../scenes/scene04/Scene04.js';
+import { Scene05 } from '../scenes/scene05/Scene05.js';
+import { Scene06 } from '../scenes/scene06/Scene06.js';
+import { Scene07 } from '../scenes/scene07/Scene07.js';
+import { Scene08 } from '../scenes/scene08/Scene08.js';
+import { Scene09 } from '../scenes/scene09/Scene09.js';
+import { Scene10 } from '../scenes/scene10/Scene10.js';
+import { Scene11 } from '../scenes/scene11/Scene11.js';
+import { Scene12 } from '../scenes/scene12/Scene12.js';
 
 /** 登録シーン数 */
-export const SCENE_COUNT = 4;
-/** シーンバンク数（UI 互換：[] でバンク切替。実質シーンは 2 のみ） */
-export const SCENE_BANK_COUNT = 1;
+export const SCENE_COUNT = 12;
+/** シーンバンク数（[] で切替。1バンク=10スロット） */
+export const SCENE_BANK_COUNT = 2;
 /** 最大シーンスロット番号（0 始まりインデックスの上限） */
-export const MAX_SCENE_SLOTS = SCENE_COUNT;
+export const MAX_SCENE_SLOTS = SCENE_BANK_COUNT * 10;
 
 export class SceneManager {
     constructor(renderer, camera, sharedResourceManager = null, options = {}) {
@@ -47,16 +55,40 @@ export class SceneManager {
         let scene = null;
         switch (index) {
             case 0:
-                scene = new Scene1(this.renderer, this.camera, this.sharedResourceManager);
+                scene = new Scene01(this.renderer, this.camera, this.sharedResourceManager);
                 break;
             case 1:
-                scene = new Scene2(this.renderer, this.camera, this.sharedResourceManager);
+                scene = new Scene02(this.renderer, this.camera, this.sharedResourceManager);
                 break;
             case 2:
-                scene = new Scene3(this.renderer, this.camera, this.sharedResourceManager);
+                scene = new Scene03(this.renderer, this.camera, this.sharedResourceManager);
                 break;
             case 3:
-                scene = new Scene4(this.renderer, this.camera, this.sharedResourceManager);
+                scene = new Scene04(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 4:
+                scene = new Scene05(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 5:
+                scene = new Scene06(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 6:
+                scene = new Scene07(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 7:
+                scene = new Scene08(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 8:
+                scene = new Scene09(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 9:
+                scene = new Scene10(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 10:
+                scene = new Scene11(this.renderer, this.camera, this.sharedResourceManager);
+                break;
+            case 11:
+                scene = new Scene12(this.renderer, this.camera, this.sharedResourceManager);
                 break;
             default:
                 console.warn(`無効なシーンインデックス: ${index}`);
@@ -75,10 +107,18 @@ export class SceneManager {
             this.createScene(this.defaultSceneIndex);
             this.currentSceneIndex = this.defaultSceneIndex;
         } else {
-            this.scenes.push(new Scene1(this.renderer, this.camera, this.sharedResourceManager));
-            this.scenes.push(new Scene2(this.renderer, this.camera, this.sharedResourceManager));
-            this.scenes.push(new Scene3(this.renderer, this.camera, this.sharedResourceManager));
-            this.scenes.push(new Scene4(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene01(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene02(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene03(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene04(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene05(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene06(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene07(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene08(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene09(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene10(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene11(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene12(this.renderer, this.camera, this.sharedResourceManager));
 
             this.currentSceneIndex = this.defaultSceneIndex;
             this.sceneBankIndex = Math.floor(this.currentSceneIndex / 10);

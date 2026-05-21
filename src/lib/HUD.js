@@ -978,7 +978,7 @@ export class HUD {
         // システム名を表示（FPSの上）
         this.ctx.fillStyle = this.hudColor;  // 白文字
         this.ctx.font = `${this.fontWeight} ${this.fontSize}px ${this.fontFamily}`;
-        this.ctx.fillText('SYSTEM: MAVRX4-experiment', x, y);
+        this.ctx.fillText('SYSTEM: MAVRX4-Lab Series', x, y);
         y += lineHeight;
         if (sceneNumber !== null && sceneNumber !== undefined) {
             this.ctx.fillText(`SCENE: ${sceneNumber}`, x, y);

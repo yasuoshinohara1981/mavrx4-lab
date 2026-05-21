@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /**
- * Scene2 カメラ・モーション関連のロジック
+ * Scene10 カメラ・モーション関連のロジック
  */
 
 /**

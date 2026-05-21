@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { InstancedMeshManager } from '../../lib/InstancedMeshManager.js';
-import { Scene2Particle } from './Scene2Particle.js';
-import { setRandomBlueGrayParticleColor, setHeatmapColorFromUnit } from './scene2.helpers.js';
+import { Scene10Particle } from './Scene10Particle.js';
+import { setRandomBlueGrayParticleColor, setHeatmapColorFromUnit } from './scene10.helpers.js';
 import { generateRockPBRTextures } from '../../lib/RockPBRTextures.js';
 
 /**
- * Scene2 パーティクル（立方体インスタンス）関連のロジック
+ * Scene10 パーティクル（立方体インスタンス）関連のロジック
  */
 
 /**
@@ -79,7 +79,7 @@ export function createSpheres(scene) {
 
         const scale = new THREE.Vector3(worldR, worldR, worldR);
         const radius = Math.max(scale.x, scale.y, scale.z) * 0.5;
-        const p = new Scene2Particle(x, y, z, radius, scale);
+        const p = new Scene10Particle(x, y, z, radius, scale);
         p.angularVelocity.multiplyScalar(2.0);
         scene.particles.push(p);
 

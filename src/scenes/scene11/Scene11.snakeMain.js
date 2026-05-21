@@ -1,12 +1,12 @@
 /**
- * Scene3 メイン：ノードガーデン（近接 Sphere 同士を黄色シリンダーで接続）＋カールで動くスポーン中心
+ * Scene11 メイン：ノードガーデン（近接 Sphere 同士を黄色シリンダーで接続）＋カールで動くスポーン中心
  */
 
 import * as THREE from 'three';
 import { generateFleshVeinTextures } from '../../lib/FleshVeinTextures.js';
-import { fadeOpacity01, attachInstanceOpacityAttribute } from '../scene01/scene1.helpers.js';
-import { curlNoiseWorld } from './scene3.curlNoise.js';
-import { generateLinkTubeWornTextures } from './scene3.linkTubeTextures.js';
+import { fadeOpacity01, attachInstanceOpacityAttribute } from '../scene10/scene10.helpers.js';
+import { curlNoiseWorld } from './scene11.curlNoise.js';
+import { generateLinkTubeWornTextures } from './scene11.linkTubeTextures.js';
 
 const SPHERE_COUNT = 700; // 1000から700に減らして軽量化や！🚀
 const SPHERE_RADIUS_TO_WORLD = 0.138;

@@ -1,11 +1,11 @@
 /**
- * Three.js MAVRX4 Live Visual
+ * mavrx4-lab — 実験室シリーズ
  * メインエントリーポイント
  */
 
 import * as THREE from 'three';
 import { OSCManager } from './systems/OSCManager.js';
-import { SceneManager } from './systems/SceneManager.js';
+import { SceneManager, MAX_SCENE_SLOTS } from './systems/SceneManager.js';
 import { SharedResourceManager } from './lib/SharedResourceManager.js';
 import { attachCanvasDragOrbit } from './lib/CanvasDragOrbit.js';
 
@@ -18,8 +18,8 @@ import { attachCanvasDragOrbit } from './lib/CanvasDragOrbit.js';
 // false: ライブモード（全てのシーンをプリロード）
 const IS_DEVELOPMENT_MODE = false;  // 開発時は true に変更
 
-// デフォルトシーンのインデックス（0 = Scene1, 1 = Scene2, 2 = Scene3, 3 = Scene4）
-const DEFAULT_SCENE_INDEX = 3;
+// デフォルトシーンのインデックス（0 = Scene01, … 11 = Scene12）
+const DEFAULT_SCENE_INDEX = 0;
 
 // ============================================
 // 初期化
@@ -180,7 +180,8 @@ function initSceneManager() {
     
     // シーン切り替え時のコールバック
     sceneManager.onSceneChange = (sceneName) => {
-        document.getElementById('sceneName').textContent = sceneName;
+        const el = document.getElementById('sceneName');
+        if (el) el.textContent = sceneName;
         if (canvasDragOrbit) {
             canvasDragOrbit.reset();
         }
@@ -247,6 +248,24 @@ function toggleFullscreen() {
 // キーボード入力処理
 // ============================================
 
+/** Ctrl+数字のスロット（0〜9）。Windows 等で e.key が制御文字になる場合は e.code を使う */
+function resolveSceneSlotFromKeyEvent(e) {
+    const digitMatch = /^Digit([0-9])$/.exec(e.code);
+    if (digitMatch) {
+        const d = digitMatch[1];
+        return d === '0' ? 9 : parseInt(d, 10) - 1;
+    }
+    const numpadMatch = /^Numpad([0-9])$/.exec(e.code);
+    if (numpadMatch) {
+        const d = numpadMatch[1];
+        return d === '0' ? 9 : parseInt(d, 10) - 1;
+    }
+    if (e.key >= '0' && e.key <= '9') {
+        return e.key === '0' ? 9 : parseInt(e.key, 10) - 1;
+    }
+    return null;
+}
+
 /**
  * キーが押された時の処理（キーダウン）
  */
@@ -291,14 +310,14 @@ function handleKeyDown(e) {
     
     // Ctrl + 数字キーでシーン切り替え（バンク内のスロット: 1=先頭 … 9=9番目、0=10番目）
     if (ctrlPressed || isCtrlPressed) {
-        if (e.key >= '0' && e.key <= '9') {
+        const slot = resolveSceneSlotFromKeyEvent(e);
+        if (slot !== null) {
             e.preventDefault();
-            const slot = e.key === '0' ? 9 : (parseInt(e.key, 10) - 1);
             const sceneIndex = sceneManager.sceneBankIndex * 10 + slot;
-            if (sceneIndex >= 0 && sceneIndex < sceneManager.scenes.length && sceneManager.scenes[sceneIndex]) {
+            if (sceneIndex >= 0 && sceneIndex < MAX_SCENE_SLOTS) {
                 sceneManager.switchScene(sceneIndex);
             } else {
-                console.warn(`[Scene] 無効なスロット: bank=${sceneManager.sceneBankIndex} key=${e.key} → index=${sceneIndex}`);
+                console.warn(`[Scene] 無効なスロット: bank=${sceneManager.sceneBankIndex} key=${e.key} code=${e.code} → index=${sceneIndex}`);
             }
             return;
         }

@@ -8,7 +8,7 @@ import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 import helvetikerFontUrl from 'three/examples/fonts/helvetiker_regular.typeface.json?url';
 
 /**
- * Scene2 部屋・ライト関連のロジック
+ * Scene10 部屋・ライト関連のロジック
  */
 
 /**
@@ -127,7 +127,7 @@ export async function initWallMatteBlack3DText(scene) {
                 y -= titleH * 1.05 + 140;
 
                 const bodyLines = [
-                    'Scene 2: Emerald Swarm. Instanced cubes with procedural motion fields.',
+                    'Scene10: Emerald Swarm. Instanced cubes with procedural motion fields.',
                     '11 motion modes: drift, upthrust, helix, lemniscate, and more.',
                     'Audio-reactive expansion effects and real-time PBR environment.',
                     'Unified StudioBox pipeline with SSAO, bloom, and depth of field.'

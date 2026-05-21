@@ -1,5 +1,5 @@
 /**
- * Scene2: 既定は Studio 部屋＋StudioBox（箱は非表示）＋天井スポット等。voidBlackSoloMode を true にすると真っ黒＋チリ中心の実験モード。
+ * Scene10: 既定は Studio 部屋＋StudioBox（箱は非表示）＋天井スポット等。voidBlackSoloMode を true にすると真っ黒＋チリ中心の実験モード。
  * メインの飛行オブジェクト：エメラルド風立方体 InstancedMesh・運動モード11種・OSC トラック6。
  */
 
@@ -21,19 +21,19 @@ import {
 } from '../../lib/presentation/index.js';
 
 // 分割したモジュールのインポート
-import * as Helpers from './scene2.helpers.js';
-import * as Motion from './scene2.motion.js';
-import * as Room from './scene2.room.js';
-import * as Shards from './scene2.shards.js';
+import * as Helpers from './scene10.helpers.js';
+import * as Motion from './scene10.motion.js';
+import * as Room from './scene10.room.js';
+import * as Shards from './scene10.shards.js';
 import { StudioAtmosphere } from '../../lib/StudioAtmosphere.js';
 import { MagmaSphere } from '../../lib/MagmaSphere.js';
 
-export class Scene2 extends SceneBase {
+export class Scene10 extends SceneBase {
     constructor(renderer, camera, sharedResourceManager = null) {
         super(renderer, camera);
         this.title = 'mathym | Xenobirth';
         this.initialized = false;
-        this.sceneNumber = 2;
+        this.sceneNumber = 10;
         this.kitNo = 2;
         this.sharedResourceManager = sharedResourceManager;
 

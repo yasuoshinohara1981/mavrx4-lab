@@ -1,11 +1,11 @@
 /**
- * Scene1Particle: Scene1（ケーブルブロブ等）用パーティクル
+ * Scene08Particle: Scene08 コンクリート空間用（カメラパーティクル周辺のオフセット）
  */
 
 import { Particle } from '../../lib/Particle.js';
 import * as THREE from 'three';
 
-export class Scene1Particle extends Particle {
+export class Scene08Particle extends Particle {
     constructor(initialX = 0, initialY = 0, initialZ = 0, radius = 10, scale = null, typeIndex = 0, indexInType = 0) {
         super(initialX, initialY, initialZ);
         this.radius = radius;
@@ -15,7 +15,7 @@ export class Scene1Particle extends Particle {
 
         const tOffsetTheta = Math.random() * Math.PI * 2;
         const tOffsetPhi = Math.acos(2 * Math.random() - 1);
-        const tOffsetR = Math.pow(Math.random(), 0.5) * 250;
+        const tOffsetR = Math.pow(Math.random(), 0.5) * 420;
         this.targetOffset = new THREE.Vector3(
             tOffsetR * Math.sin(tOffsetPhi) * Math.cos(tOffsetTheta),
             tOffsetR * Math.sin(tOffsetPhi) * Math.sin(tOffsetTheta),

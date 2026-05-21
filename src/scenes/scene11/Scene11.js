@@ -1,5 +1,5 @@
 /**
- * Scene3: Studio 部屋＋StudioBox（箱は非表示）＋天井スポットまでを Scene1/2 と同系で構築。
+ * Scene11: Studio 部屋＋StudioBox（箱は非表示）＋天井スポットまでを Scene1/2 と同系で構築。
  * メインオブジェクト・OSC トラック処理は後から追加する。
  */
 
@@ -20,23 +20,23 @@ import {
     StudioBox,
     STUDIO_ROOM_SCENE_FOG_COLOR
 } from '../../lib/presentation/index.js';
-import * as Room from '../scene02/scene2.room.js';
-import * as Motion from '../scene02/scene2.motion.js';
+import * as Room from '../scene10/scene10.room.js';
+import * as Motion from '../scene10/scene10.motion.js';
 import {
     initCurlSnakeSystems,
     updateCurlSnakeSystems,
     disposeCurlSnakeSystems,
     scene3OnTrack6Spawn
-} from './scene3.snakeMain.js';
-import { parseTrackNumber } from '../scene02/scene2.helpers.js';
+} from './scene11.snakeMain.js';
+import { parseTrackNumber } from '../scene10/scene10.helpers.js';
 import { StudioAtmosphere } from '../../lib/StudioAtmosphere.js';
 
-export class Scene3 extends SceneBase {
+export class Scene11 extends SceneBase {
     constructor(renderer, camera, sharedResourceManager = null) {
         super(renderer, camera);
         this.title = 'mathym | Xenoxa';
         this.initialized = false;
-        this.sceneNumber = 3;
+        this.sceneNumber = 11;
         this.kitNo = 3;
         this.sharedResourceManager = sharedResourceManager;
 

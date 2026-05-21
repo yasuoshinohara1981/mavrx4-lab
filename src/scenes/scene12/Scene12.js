@@ -1,6 +1,6 @@
 /**
- * Scene4: Scene3 系統をベースに、StudioBox 可視メッシュ＋部屋ジオメトリを非表示にした真っ黒空間。
- * ポスト（DOF・SSAO・Bloom・フィルムグレイン等）は Scene3 と同じパイプライン。
+ * Scene12: Scene3 ????????StudioBox ???????????????????????????
+ * ????DOF?SSAO?Bloom???????????? Scene3 ??????????
  */
 
 import { SceneBase } from '../SceneBase.js';
@@ -19,23 +19,23 @@ import {
     applyStudioRoomFloorWallEnvMaps,
     StudioBox
 } from '../../lib/presentation/index.js';
-import * as Room from '../scene02/scene2.room.js';
-import * as Motion from '../scene02/scene2.motion.js';
+import * as Room from '../scene10/scene10.room.js';
+import * as Motion from '../scene10/scene10.motion.js';
 import {
     initCurlSnakeSystems,
     updateCurlSnakeSystems,
     disposeCurlSnakeSystems,
     scene3OnTrack6Spawn
-} from '../scene03/scene3.snakeMain.js';
-import { parseTrackNumber } from '../scene02/scene2.helpers.js';
+} from '../scene11/scene11.snakeMain.js';
+import { parseTrackNumber } from '../scene10/scene10.helpers.js';
 import { StudioAtmosphere } from '../../lib/StudioAtmosphere.js';
 
-export class Scene4 extends SceneBase {
+export class Scene12 extends SceneBase {
     constructor(renderer, camera, sharedResourceManager = null) {
         super(renderer, camera);
         this.title = 'mathym | Xenodub';
         this.initialized = false;
-        this.sceneNumber = 4;
+        this.sceneNumber = 12;
         this.kitNo = 4;
         this.sharedResourceManager = sharedResourceManager;
 
@@ -135,7 +135,7 @@ export class Scene4 extends SceneBase {
         cameraParticle.initializePosition?.();
     }
 
-    /** StudioBox の発光メッシュだけ消す（PointLight はそのまま）。 */
+    /** StudioBox ????????????PointLight ??????? */
     _hideStudioBoxVisuals() {
         if (!this.studio) return;
         if (this.studio.studioBox) this.studio.studioBox.visible = false;
@@ -199,7 +199,7 @@ export class Scene4 extends SceneBase {
             const floorMat = this.roomGroup.children[0].material;
             const wallMat = this.roomGroup.children[1].material;
             applyStudioRoomFloorWallEnvMaps(wallMat, floorMat);
-            // 床・壁・天井プレーンを描画しない（ライト用ロジック・コリダーは維持）
+            // ??????????????????????????????????
             this.roomGroup.visible = false;
         }
 

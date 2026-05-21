@@ -1,0 +1,132 @@
+{
+  "nature/dikhololo_night_8k.hdr": {
+    "sunPosition": {
+      "x": -1137.360473078536,
+      "y": 7010.039559442707,
+      "z": 3683.1720743574906
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "nature/kloppenheim_02_8k.hdr": {
+    "sunPosition": {
+      "x": 4455.774265728185,
+      "y": 2336.952420768291,
+      "z": 6219.704902641257
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "nature/lilienstein_8k.hdr": {
+    "sunPosition": {
+      "x": 4421.589480019859,
+      "y": 2876.2976945757846,
+      "z": 6014.686861537826
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "nature/moonless_golf_8k.hdr": {
+    "sunPosition": {
+      "x": -5569.519700044077,
+      "y": 499.7521277858,
+      "z": -5721.074909629701
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "nature/satara_night_8k.hdr": {
+    "sunPosition": {
+      "x": -7762.4350153885525,
+      "y": 27.61159936108795,
+      "z": -1934.900574047783
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "pure_skies/autumn_field_puresky_1k.hdr": {
+    "sunPosition": {
+      "x": 4150.6643755372625,
+      "y": 3878.9539840063285,
+      "z": 5632.557255066948
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "pure_skies/kloofendal_28d_misty_puresky_4k.exr": {
+    "sunPosition": {
+      "x": -1313.1101012586194,
+      "y": 3819.7862694935843,
+      "z": 6905.430813306355
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "pure_skies/kloofendal_48d_partly_cloudy_puresky_8k.hdr": {
+    "sunPosition": {
+      "x": 3023.6297895546545,
+      "y": 5933.786029742273,
+      "z": 4432.589113481318
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "pure_skies/kloofendal_misty_morning_puresky_4k.exr": {
+    "sunPosition": {
+      "x": 3943.757860299033,
+      "y": 5520.766659348799,
+      "z": 4238.857090343138
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 1.343984537577629,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  },
+  "urban/the_sky_is_on_fire_8k.hdr": {
+    "sunPosition": {
+      "x": -5085.4144103236395,
+      "y": 199.39685123425176,
+      "z": -6172.422633860269
+    },
+    "sunColor": 16777215,
+    "sunIntensity": 2,
+    "useLensFlare": true,
+    "lensFlareIntensity": 0.4,
+    "fogColor": 11916520,
+    "fogDensity": 0.00008
+  }
+}

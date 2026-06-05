@@ -531,9 +531,11 @@ export class HUD {
         const scanBandH = 26;
 
         const ph = Number.isFinite(phase) ? Math.floor(phase) : 0;
-        const t2 = trackEffects?.[2] ? 'FLS' : '--';
-        const t3 = trackEffects?.[3] ? 'CHR' : '--';
-        const t4 = trackEffects?.[4] ? 'GLT' : '--';
+        // トラック1〜4のエフェクトトグルは数字式に統一（FX1〜FX4）
+        const t1 = trackEffects?.[1] ? 'FX1' : '---';
+        const t2 = trackEffects?.[2] ? 'FX2' : '---';
+        const t3 = trackEffects?.[3] ? 'FX3' : '---';
+        const t4 = trackEffects?.[4] ? 'FX4' : '---';
 
         // 上→下：スキャン → バンクラベル → スロット横列（必ず bandTop から開始）
         let y = bandTop;
@@ -577,7 +579,7 @@ export class HUD {
         this.ctx.textBaseline = 'bottom';
         this.ctx.globalAlpha = 0.75;
         this.ctx.fillStyle = this.hudColor;
-        this.ctx.fillText(`PHASE ${ph}   ${t2} ${t3} ${t4}`, x0, scanLineY - 4);
+        this.ctx.fillText(`PHASE ${ph}   ${t1} ${t2} ${t3} ${t4}`, x0, scanLineY - 4);
 
         this.ctx.font = '8px monospace';
         this.ctx.textAlign = 'center';
@@ -1041,10 +1043,10 @@ export class HUD {
             y += lineHeight;
             
             const effectNames = {
-                1: 'CAM',
-                2: 'INV',
-                3: 'CHR',
-                4: 'GLT',
+                1: 'FX1',
+                2: 'FX2',
+                3: 'FX3',
+                4: 'FX4',
                 5: 'FX5',
                 6: 'FX6',
                 7: 'FX7',

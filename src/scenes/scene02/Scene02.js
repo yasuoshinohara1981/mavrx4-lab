@@ -21,7 +21,8 @@ import {
     studioBoxOptionsForStudioRoom,
     ceilingSpotRigOptionsForStudioRoom,
     setupStudioRoomPromoWallFillLight,
-    STUDIO_CEILING_Y
+    STUDIO_CEILING_Y,
+    STUDIO_FLOOR_TOP_Y
 } from '../../lib/presentation/index.js';
 import { Scene02Particle } from './Scene02Particle.js';
 
@@ -120,7 +121,7 @@ export class Scene02 extends SceneBase {
     setupCameraParticleDistance(cameraParticle) {
         cameraParticle.minDistance = 400;
         cameraParticle.maxDistance = 3000;
-        cameraParticle.minY = -450; // 地面より下に行かないように制限
+        cameraParticle.minY = STUDIO_FLOOR_TOP_Y; // StudioBox 床上面と一致
     }
 
     /**
@@ -157,7 +158,7 @@ export class Scene02 extends SceneBase {
         this.initGridRuler3D({
             center: { x: 0, y: 0, z: 0 },
             size: { x: 5000, y: 5000, z: 5000 },
-            floorY: -498, // 床(-499)より1ユニット上に配置してZファイティングを物理的に回避
+            floorY: STUDIO_FLOOR_TOP_Y, // StudioBox 床上面（Zファイティング回避で+0は plane 上面と一致）
             floorSize: 10000,
             floorDivisions: 100,
             labelMax: 256
@@ -778,7 +779,7 @@ this.modeHistory.clear();
                     // 螺旋モード以外でも高く昇れるようにする
                     if (p.position.y > 4500) { 
                         if (this.currentMode === this.MODE_SPIRAL) {
-                            p.position.y = -450; // 下端から再出現
+                            p.position.y = STUDIO_FLOOR_TOP_Y; // 床上面から再出現
                             p.velocity.y *= 0.1; // 勢いをリセット
                         } else {
                             p.position.y = 4500; // 他は跳ね返り
@@ -786,8 +787,8 @@ this.modeHistory.clear();
                         }
                     }
                     
-                    if (p.position.y < -450) { 
-                        p.position.y = -450; 
+                    if (p.position.y < STUDIO_FLOOR_TOP_Y) { 
+                        p.position.y = STUDIO_FLOOR_TOP_Y; 
                         p.velocity.y *= -0.1; // 0.2 -> 0.1
                         const rollFactor = 0.05 / (p.radius / 30); // 0.1 -> 0.05
                         p.angularVelocity.z = -p.velocity.x * rollFactor;

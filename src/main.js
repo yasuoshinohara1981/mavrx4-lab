@@ -18,8 +18,8 @@ import { attachCanvasDragOrbit } from './lib/CanvasDragOrbit.js';
 // false: ライブモード（全てのシーンをプリロード）
 const IS_DEVELOPMENT_MODE = false;  // 開発時は true に変更
 
-// デフォルトシーンのインデックス（0 = Scene01, … 11 = Scene12）
-const DEFAULT_SCENE_INDEX = 0;
+// デフォルトシーンのインデックス（0 = Scene01, … 8 = Scene09, … 11 = Scene12）
+const DEFAULT_SCENE_INDEX = 8;
 
 // ============================================
 // 初期化

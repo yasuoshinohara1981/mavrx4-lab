@@ -1,6 +1,21 @@
 /**
- * Scene09: 部屋・ライト・フォグ・ポストは Scene21 と同型（Studio タイル部屋＋平行光シャドウ＋SSAO 等）。
- * メインの飛行オブジェクトのみ独自：岩色チャコール立方体 InstancedMesh・運動モード11種・OSC トラック6。
+ * Scene09: mathym | Xenofog
+ *
+ * mavrx4/scene09(data.scan) の「うねりグリッド＋赤い菱形マーカー◇＋コールアウト」を
+ * ラボの岩色チャコール立方体（InstancedMesh）へ移植した版。
+ *
+ * 方針A:
+ *  - 11モード運動はやめ、立方体をグリッド格子点に固定配置（1立方体 = 1格子点）。
+ *  - 毎フレーム _gridWarp の式で床(XZ平面)をうねらせ、立方体の粒でウネリグリッドを表現。
+ *  - 立方体の質感（岩色チャコール・metalness・IBL・回転 updateRotation）はそのまま維持。
+ *  - DOF/SSAO/Bloom/Fog/カメラ・track6 の expand エフェクトは維持。
+ *  - 赤い印・コールアウトはうねる立方体面（床グリッド）に乗せて追従。
+ *
+ * OSC:
+ *  - track1: 赤い菱形マーカー◇スポーン ＋（trackEffects[1] ON時）カメラランダマイズ
+ *  - track5: コールアウト（床の立方体面に投影）
+ *  - track6: 立方体の expand エフェクト（維持。handleTrackNumber で処理）
+ *  - track2/3/4・/phase・/tick は super.handleOSC に委譲
  */
 
 import { SceneBase } from '../SceneBase.js';
@@ -8,6 +23,7 @@ import * as THREE from 'three';
 import {
     StudioBox,
     setupPostEffectsPipeline,
+    attachStrobeFlashPass,
     updateSsaoDistanceAttenuation,
     resizePostEffectsPasses,
     disposePresentationOutputPass,
@@ -17,7 +33,8 @@ import {
     studioBoxOptionsForStudioRoom,
     ceilingSpotRigOptionsForStudioRoom,
     setupStudioRoomPromoWallFillLight,
-    applyStudioRoomFloorWallEnvMaps
+    STUDIO_FLOOR_TOP_Y,
+    STUDIO_CEILING_Y
 } from '../../lib/presentation/index.js';
 import { InstancedMeshManager } from '../../lib/InstancedMeshManager.js';
 import { Scene02Particle } from '../scene02/Scene02Particle.js';
@@ -30,16 +47,12 @@ export class Scene09 extends SceneBase {
         this.kitNo = 22;
         this.sharedResourceManager = sharedResourceManager;
 
-        /** Scene21 同型：非表示 StudioBox（蛍光灯メッシュ）＋自前 roomGroup */
-        this.studio = null;
-        this.roomGroup = null;
-        this.ceilingMesh = null;
         this.pmremGenerator = null;
         this._roomEnvTexture = null;
-
-        /** Scene21 と同じ既定（ライト・床壁の env 係数の基準） */
         this.sceneLightingScale = 0.32;
         this._roomEnvPresentation = null;
+        /** @type {THREE.Light[] | null} */
+        this._minimalLights = null;
 
         this.useDOF = true;
         this.useBloom = true;
@@ -49,7 +62,8 @@ export class Scene09 extends SceneBase {
         this.sceneFogColor = 0x151820;
         this.useSSAO = true;
         this.useFilmGrain = true;
-        this.useAutoFocusDOF = false;
+        // 被写体（立方体）にピントを合わせる（他シーンと同じ質感）
+        this.useAutoFocusDOF = true;
         this.bloomPass = null;
         this.ssaoPass = null;
         this.saoPass = null;
@@ -60,241 +74,196 @@ export class Scene09 extends SceneBase {
         this.ssaoFarAttenuation = 0.62;
         this.outputPass = null;
 
-        this.fillPointLight = null;
-        this.pulsePointLight = null;
-        this.promoWallFillLight = null;
-        this.promoWallLightTarget = null;
-
-        this.airNoiseVolume = null;
-        this.airNoiseMaterial = null;
-
         this.trackEffects = {
             1: true,
-            2: false,
-            3: false,
-            4: false,
-            5: false,
+            2: true,
+            3: true,
+            4: true,
+            5: true,
             6: true,
-            7: false,
-            8: false,
-            9: false
+            7: true,
+            8: true,
+            9: true
         };
+        // track2 は色反転エフェクト（ストロボは使わない）。false で SceneBase の色反転分岐に入る。
+        this.useTrack2Strobe = false;
         this.setScreenshotText(this.title);
 
-        this.roomHalfW = 5000;
-        this.roomHalfD = 5000;
-        this.floorTopY = -498;
-        this.ceilingY = 5500;
-
-        /** Scene13 同等：インスタンス数 */
-        this.sphereCount = 2500;
-        this.spawnRadius = 1200;
         this.instancedMeshManager = null;
         this.particles = [];
-        this.gridSize = 120;
-        this.grid = new Map();
         this.expandSpheres = [];
-        this.modeTimer = 0;
-        this.modeInterval = 10.0;
-        this.totalModeCount = 11;
-        this.useGravity = false;
-        this.spiralMode = false;
-        this.torusMode = false;
-        this.useWallCollision = true;
-        this.currentVisibleCount = this.sphereCount;
+        this.useWallCollision = false;
 
-        /** 以下 11 モードは旧実装から全面差し替え（番号のみ互換） */
-        this.MODE_DRIFT_FIELD = 0;
-        this.MODE_UPTHRUST = 1;
-        this.MODE_HELIX_RAIL = 2;
-        this.MODE_LEMNISCATE = 3;
-        this.MODE_HONEYCOMB = 4;
-        this.MODE_BEAT_INTERFERENCE = 5;
-        this.MODE_BINARY_ROTATE = 6;
-        this.MODE_DNA_HELIX = 7;
-        this.MODE_TOROIDAL_VORTEX = 8;
-        this.MODE_TRIPLE_WELL = 9;
-        this.MODE_PRECESS_ORBIT = 10;
-
-        this.currentMode = this.MODE_DRIFT_FIELD;
-        this.modeHistory = new Set([this.MODE_DRIFT_FIELD]);
+        // 撮影用スタジオ（StudioBox：壁・床・天井スポット）。
+        // false でスタジオごとオフ（壁・床・光る天井を全部消し、最小ライトだけの空間にする）。
+        this.useStudioBox = false;
+        this.studio = null;
+        this.promoWallLightTarget = null;
+        this.promoWallFillLight = null;
 
         this._tmpV = new THREE.Vector3();
         this._mat = new THREE.Matrix4();
         this._quat = new THREE.Quaternion();
         this._scale = new THREE.Vector3();
-        this._centerSmoothed = new THREE.Vector3(0, 900, 0);
+        this._centerSmoothed = new THREE.Vector3(0, STUDIO_FLOOR_TOP_Y + 600, 0);
         this._colorTmp = new THREE.Color();
+
+        // ===== うねりグリッド（mavrx4/scene09 data.scan から移植）=====
+        // 立方体をグリッド格子点に配置し、毎フレーム _gridWarp で床(XZ平面)をうねらせる。
+        // 1立方体 = 1格子点。立方体の岩質感・回転・IBL はそのまま維持。
+
+        // ---- 正面に垂直展開する格子（XY平面の壁）----
+        // 立方体が正面に縦の壁を作り、その壁が手前/奥(Z方向)にうねる。
+        // StudioBox(部屋 10000角=半径5000、床上面 STUDIO_FLOOR_TOP_Y=-498、天井5500)の中に収める。
+        // 横幅は ±4600(部屋±5000内ギリギリ)、縦は床-498から+5102(天井5500内ギリギリ)まで使う。
+        this.gridFieldW = 9200.0;     // X方向の広さ（壁の横幅）±4600
+        this.gridFieldH = 5600.0;     // Y方向の高さ（壁の縦幅）床上 -498〜+5102
+        // 壁の下端を床(STUDIO_FLOOR_TOP_Y)に着ける：中心 = 床 + 高さ/2
+        this.gridCenterY = STUDIO_FLOOR_TOP_Y + this.gridFieldH * 0.5;
+        this.gridCenterZ = 0.0;       // 壁の基準Z（うねりはここを中心に手前/奥へ）
+        this.gridCols = 56;           // X方向の格子点数（密度アップ）
+        this.gridRows = 48;           // Y方向の格子点数（密度アップ）
+        this.sphereCount = this.gridCols * this.gridRows;   // 立方体数＝格子点数（2688）
+
+        // 各立方体の基準座標（うねり計算の元）。i番目 → (baseX, baseY)
+        this.gridBaseX = null;        // Float32Array(sphereCount)
+        this.gridBaseY = null;        // Float32Array(sphereCount)
+
+        // クラスタリング/スナップ用にグリッド密度の別名を保持
+        this.gridFineCols = this.gridCols * 2;
+        this.gridFineRows = this.gridRows * 2;
+        this.gridCoarseCols = this.gridCols;
+        this.gridCoarseRows = this.gridRows;
+
+        // グリッドうねりの音反応レベル（expandやtrackで増幅）
+        this.gridWarpLevel = 0.0;
+
+        // ===== track10: Z方向の押し出しパルス（衝撃波）=====
+        // 常時うねりはやめ、track10 が来た時だけ壁(XY平面)の一点をランダムにZ方向へ
+        // 押し出し、しばらくしてゆっくり戻る。グリッドも波形もこの押し出しに乗る。
+        //  - velocity = 押し出しの強さ（Z変位の大きさ）
+        //  - duration = 影響範囲の広さ（押し出しが及ぶ半径）
+        //  - 方向 = 前後どちらかランダム（手前 Z+ / 奥 Z-）
+        this.warpPulses = [];          // { x, y, dir, amp, radius, life, maxLife }[]
+        this.warpPulseMax = 16;        // 同時アクティブ上限（古いものから消す）
+        this.pulseAmpMin = 200.0;      // velocity=0 の押し出し量
+        this.pulseAmpMax = 2200.0;     // velocity=127 の押し出し量
+        this.pulseRadiusMin = 1200.0;  // duration 0 の影響半径
+        this.pulseRadiusPerSec = 5000.0; // duration 1秒あたり広がる半径
+        this.pulseDecay = 0.9;         // 戻りの速さ（小さいほどゆっくり戻る）
+        // 待機時のごく僅かな呼吸（完全静止だと寂しいので微揺れ）
+        this.idleBreathAmp = 22.0;     // 待機時のZ微揺れ振幅
+
+        // ===== トラック別オシロ波形（mavrx4/scene09 から移植）=====
+        // 1トラック=1本、最大12本をグリッドの上空に重ねる。ヒートマップ色のTube(蛇)。
+        // 左壁(X=-4600)から右壁(X=+4600)まで部屋(10000角=半径5000)を横断する幅（壁から出てる感）
+        // 壁グリッド幅(9200)に合わせて、波形も壁端から出るように揃える。
+        this.waveFieldW = 9200.0;     // 波形の横幅（左壁→右壁）±4600
+        this.waveCenterY = this.gridCenterY;   // 波形をグリッドのど真ん中の高さに浮かべる
+        this.trackCount = 12;         // track1〜12
+        this.waveSegments = 160;      // 1本あたりの分解能（Tube生成用）
+        this.waveLines = [];          // THREE.Mesh[]（Tube。index = track-1）
+        this.wavePositions = [];      // Float32Array[]（波形の点列）
+        this.waveTubeRadius = 6.0;    // チューブの太さ（床スケールに合わせて太め）
+        this._waveCurvePts = [];      // 毎フレーム使い回す Vector3 配列（GC削減）
+        this.wavePhase = 0.0;
+        this.trackVoice = [];         // {env, freq, amp, decay, phase}[]
+        this.busLevel = 0.0;          // 全トラックの鳴り合計
+
+        // ---- track5: コールアウト ----
+        this.calloutReady = false;
+        this.calloutTextTick = 0;
+        this.calloutTextInterval = 0.05;  // 表示中ずっと矢継ぎ早に流れる差し替え間隔
+
+        // ---- track1: 赤い菱形マーカー◇（床グリッド上に積み上げ式）----
+        this.crossMax = 256;
+        this.crossGroup = null;
+        this.crossPool = [];
+        this._crossNext = 0;
+        this.crossSize = 48;          // 菱形の半径（立方体の縮小に合わせて小さめ）
+
+        // ---- track8: 波形の中心を貫く X軸シリンダー（duration=長さ / velocity=色と太さ）----
+        // 波形群は Y=gridCenterY・Z≒0 を中心に左右(X)へ走る。その中心軸を串刺しにする横棒。
+        this.track8Cylinders = [];    // { mesh, life, maxLife }[]（寿命で消す）
+        this.track8MaxCount = 8;      // 同時発射の上限（古いものから消す）
+        this.track8RadiusMin = 8.0;   // velocity=0 のときの太さ
+        this.track8RadiusMax = 90.0;  // velocity=127 のときの太さ
+        this.track8LenMin = 1200.0;   // duration 0 のときの最低長さ
+        this.track8LenPerSec = 6000.0;// duration 1秒あたり伸びる長さ
+
+        // ---- イベント間隔クラスタリング（短い間隔ほど前回位置の近くに出す）----
+        this.lastEvtTime = {};
+        this.lastEvtPos = {};
+        this.clusterFarTime = 0.6;
+
+        // ---- 擬似乱数（離散更新用シード）----
+        this.seed = 0x9e3779b9 | 0;
+        this._warpScratch = { x: 0, y: 0, z: 0 };
     }
 
-    buildRoom() {
-        const floorTpl = StudioBox.createFloorTileTextures();
-        const wallTpl = StudioBox.createWallTileTextures();
-        const L = this.sceneLightingScale ?? 1;
-        const studioRough = 0.8;
-        const floorConcreteMat = new THREE.MeshStandardMaterial({
-            color: 0xffffff,
-            map: floorTpl.map,
-            bumpMap: floorTpl.bumpMap,
-            bumpScale: 1.0,
-            roughness: studioRough * 0.3,
-            metalness: 0.2,
-            envMapIntensity: 1.0 * 1.3 * (0.55 + 0.45 * L),
-            fog: true
-        });
-        const wallConcreteMat = new THREE.MeshStandardMaterial({
-            color: 0xffffff,
-            map: wallTpl.map,
-            bumpMap: wallTpl.bumpMap,
-            bumpScale: 1.0,
-            roughness: studioRough * 0.5,
-            metalness: 0.1,
-            envMapIntensity: 1.0 * (0.55 + 0.45 * L),
-            fog: true
-        });
-
-        this.roomGroup = new THREE.Group();
-        const hw = this.roomHalfW;
-        const hd = this.roomHalfD;
-        const floorTopY = this.floorTopY;
-        const ceilingY = this.ceilingY;
-        const wallH = ceilingY - floorTopY;
-        const wallCenterY = floorTopY + wallH * 0.5;
-        const slab = 24;
-
-        const floorGeo = new THREE.BoxGeometry(hw * 2, slab, hd * 2, 1, 1, 1);
-        const floor = new THREE.Mesh(floorGeo, floorConcreteMat);
-        floor.position.set(0, floorTopY - slab * 0.5, 0);
-        floor.receiveShadow = true;
-        floor.castShadow = false;
-        this.roomGroup.add(floor);
-
-        const mkWall = (w, height, d, px, py, pz) => {
-            const geo = new THREE.BoxGeometry(w, height, d, 1, 1, 1);
-            const mesh = new THREE.Mesh(geo, wallConcreteMat);
-            mesh.position.set(px, py, pz);
-            mesh.receiveShadow = true;
-            mesh.castShadow = true;
-            this.roomGroup.add(mesh);
-        };
-
-        mkWall(slab, wallH, hd * 2, -hw - slab * 0.5, wallCenterY, 0);
-        mkWall(slab, wallH, hd * 2, hw + slab * 0.5, wallCenterY, 0);
-        mkWall(hw * 2, wallH, slab, 0, wallCenterY, -hd - slab * 0.5);
-        mkWall(hw * 2, wallH, slab, 0, wallCenterY, hd + slab * 0.5);
-
-        const ceilingGeo = new THREE.PlaneGeometry(hw * 2, hd * 2);
-        ceilingGeo.rotateX(Math.PI / 2);
-        const ceilingMat = new THREE.MeshStandardMaterial({
-            color: 0xffffff,
-            side: THREE.DoubleSide,
-            roughness: 0.8,
-            metalness: 0,
-            emissive: 0xffffff,
-            emissiveIntensity: 8.5 * (this.sceneLightingScale ?? 1),
-            envMapIntensity: 1.0,
-            fog: true
-        });
-        this.ceilingMesh = new THREE.Mesh(ceilingGeo, ceilingMat);
-        this.ceilingMesh.position.set(0, ceilingY, 0);
-        this.ceilingMesh.receiveShadow = false;
-        this.ceilingMesh.castShadow = false;
-        this.roomGroup.add(this.ceilingMesh);
-
-        this.scene.add(this.roomGroup);
+    setupMinimalParticleLights() {
+        this._minimalLights = [];
+        const amb = new THREE.AmbientLight(0x444444, 0.45);
+        this.scene.add(amb);
+        this._minimalLights.push(amb);
+        const hem = new THREE.HemisphereLight(0xc8d0e0, 0x0a0c10, 0.55);
+        this.scene.add(hem);
+        this._minimalLights.push(hem);
+        const pt = new THREE.PointLight(0xffffff, 2.5, 14000, 0.4);
+        pt.position.set(0, 2400, 0);
+        this.scene.add(pt);
+        this._minimalLights.push(pt);
     }
 
-    /** Scene21 と同一 */
+    /** 壁を照らすフィルライト。Scene11 流に強度を抑えて「暗い部屋＋蛍光灯主役」にする。 */
     setupLights() {
-        this.fillPointLight = null;
-        this.pulsePointLight = null;
-
         const { promoWallLightTarget, promoWallFillLight } = setupStudioRoomPromoWallFillLight(this.scene, {
-            ceilingY: this.ceilingY
+            ceilingY: STUDIO_CEILING_Y
         });
         this.promoWallLightTarget = promoWallLightTarget;
         this.promoWallFillLight = promoWallFillLight;
+        // 壁フィルを抑えて蛍光灯(45.0)を主光源に立たせる（明るすぎ防止。Scene11 と同方向）
+        if (this.promoWallFillLight) this.promoWallFillLight.intensity *= 0.6;
     }
 
-    setupAirNoiseVolume() {
-        const volumeGeo = new THREE.BoxGeometry(this.roomHalfW * 2.6, this.ceilingY * 1.3, this.roomHalfD * 2.6);
-        this.airNoiseMaterial = new THREE.ShaderMaterial({
-            uniforms: {
-                uTime: { value: 0.0 },
-                uDensity: { value: 0.036 },
-                uColor: { value: new THREE.Color(0xffffff) }
-            },
-            vertexShader: `
-                varying vec3 vWorldPos;
-                void main() {
-                    vec4 wp = modelMatrix * vec4(position, 1.0);
-                    vWorldPos = wp.xyz;
-                    gl_Position = projectionMatrix * viewMatrix * wp;
-                }
-            `,
-            fragmentShader: `
-                varying vec3 vWorldPos;
-                uniform float uTime;
-                uniform float uDensity;
-                uniform vec3 uColor;
-
-                float hash13(vec3 p) {
-                    p = fract(p * 0.1031);
-                    p += dot(p, p.yzx + 33.33);
-                    return fract((p.x + p.y) * p.z);
-                }
-
-                float noise3(vec3 p) {
-                    vec3 i = floor(p);
-                    vec3 f = fract(p);
-                    f = f * f * (3.0 - 2.0 * f);
-
-                    float n000 = hash13(i + vec3(0.0, 0.0, 0.0));
-                    float n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-                    float n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-                    float n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-                    float n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-                    float n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-                    float n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-                    float n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-
-                    float nx00 = mix(n000, n100, f.x);
-                    float nx10 = mix(n010, n110, f.x);
-                    float nx01 = mix(n001, n101, f.x);
-                    float nx11 = mix(n011, n111, f.x);
-                    float nxy0 = mix(nx00, nx10, f.y);
-                    float nxy1 = mix(nx01, nx11, f.y);
-                    return mix(nxy0, nxy1, f.z);
-                }
-
-                float fbm(vec3 p) {
-                    float a = 0.5;
-                    float s = 0.0;
-                    for (int i = 0; i < 4; i++) {
-                        s += a * noise3(p);
-                        p = p * 2.03 + vec3(17.1, 3.7, 11.9);
-                        a *= 0.5;
-                    }
-                    return s;
-                }
-
-                void main() {
-                    vec3 p = vWorldPos * 0.0012 + vec3(0.0, uTime * 0.02, uTime * 0.012);
-                    float n = fbm(p);
-                    float vertical = smoothstep(-500.0, 2500.0, vWorldPos.y);
-                    float alpha = uDensity * (0.22 + n * 0.34) * vertical;
-                    gl_FragColor = vec4(uColor, alpha);
-                }
-            `,
-            transparent: true,
-            depthWrite: false,
-            side: THREE.BackSide,
-            blending: THREE.NormalBlending
+    /**
+     * StudioBox（部屋＝壁・床）＋天井スポットリグ。
+     * Scene11 と同系で「暗い部屋＋4隅の蛍光灯を強く光らせる」設定にする。
+     */
+    createStudioBox() {
+        const L = this.sceneLightingScale;
+        const studioOpts = {
+            ...studioBoxOptionsForStudioRoom(L, this._roomEnvTexture),
+            // 部屋はデフォルトサイズ(10000角)。オブジェクト側を部屋に収まるスケールにする。
+            // 部屋全体を暗く（環境光を絞る）
+            ambientIntensity: 0.015,
+            // studioBox 本来のライト強度を抑える（Scene11 と同様。明るすぎ防止）
+            lightIntensity: Math.max(3.0, 3.5 * L),
+            // 4隅の蛍光灯を強く発光させて主光源にする（Scene11 と同様）
+            fluorescentPointIntensity: 45.0,
+            fluorescentPointDecay: 1.2
+        };
+        this.studio = new StudioBox(this.scene, studioOpts);
+        // StudioBox 本体の「天井プレーン」が emissive で光る（StudioBox.js: 面マテリアル[2]）。
+        // Scene11 は studioBox.visible=false で箱ごと隠すが、scene09 は壁・床を使うので
+        // 天井マテリアルだけ自発光をオフにして「明るい天井」を消す（壁・床は残す）。
+        const boxMats = this.studio.studioBox?.material;
+        if (Array.isArray(boxMats) && boxMats[2]) {
+            boxMats[2].emissive?.setRGB(0, 0, 0);
+            boxMats[2].emissiveIntensity = 0.0;
+            boxMats[2].needsUpdate = true;
+        }
+        // 天井スポットの自発光・照り返しキースポットを殺して、蛍光灯だけを主光源にする（Scene11 流）。
+        const ceilBase = ceilingSpotRigOptionsForStudioRoom(L);
+        this.studio.attachCeilingSpotRig(this.studio.studioBox, {
+            includeCeilingPlane: false,
+            ...ceilBase,
+            emissiveIntensity: 0.0,   // 天井ライトの自発光オフ
+            shadowDebugSpot: {
+                ...ceilBase.shadowDebugSpot,
+                intensity: 0.0        // 照り返しキースポットもオフ（部屋を明るくしてた主犯）
+            }
         });
-
-        this.airNoiseVolume = new THREE.Mesh(volumeGeo, this.airNoiseMaterial);
-        this.airNoiseVolume.position.set(0, this.floorTopY + (this.ceilingY - this.floorTopY) * 0.55, 0);
-        this.scene.add(this.airNoiseVolume);
     }
 
     /**
@@ -405,8 +374,16 @@ export class Scene09 extends SceneBase {
         return { map: colorTex, bumpMap: bumpTex };
     }
 
+    /**
+     * 立方体をグリッド格子点に配置する（方針A・垂直壁版）。
+     * 各立方体の基準座標(baseX, baseY)を gridBaseX/gridBaseY に保持し、
+     * 毎フレーム _gridWarp で正面の壁(XY平面)を手前/奥(Z)へうねらせる。
+     */
     createSpheres() {
+        const cols = this.gridCols;
+        const rows = this.gridRows;
         const n = this.sphereCount;
+
         const geo = new THREE.BoxGeometry(1, 1, 1);
         {
             const nv = geo.attributes.position.count;
@@ -434,259 +411,201 @@ export class Scene09 extends SceneBase {
 
         this.instancedMeshManager = new InstancedMeshManager(this.scene, geo, mat, n);
         const mainMesh = this.instancedMeshManager.getMainMesh();
-        mainMesh.castShadow = true;
-        mainMesh.receiveShadow = true;
+        mainMesh.castShadow = false;
+        mainMesh.receiveShadow = false;
 
-        for (let i = 0; i < n; i++) {
-            const theta = Math.random() * Math.PI * 2;
-            const phi = Math.acos(2 * Math.random() - 1);
-            const r = Math.pow(Math.random(), 1.5) * this.spawnRadius;
-            const x = r * Math.sin(phi) * Math.cos(theta);
-            const y = r * Math.sin(phi) * Math.sin(theta);
-            const z = r * Math.cos(phi);
+        this.gridBaseX = new Float32Array(n);
+        this.gridBaseY = new Float32Array(n);
 
-            let worldR;
-            const sizeRand = Math.random();
-            if (sizeRand < 0.7) worldR = 10 + Math.random() * 10;
-            else if (sizeRand < 0.95) worldR = 20 + Math.random() * 12;
-            else worldR = 32 + Math.random() * 14;
+        const hw = this.gridFieldW * 0.5;
+        const hh = this.gridFieldH * 0.5;
 
-            const scale = new THREE.Vector3(worldR, worldR, worldR);
-            const radius = Math.max(scale.x, scale.y, scale.z) * 0.5;
-            const p = new Scene02Particle(x, y, z, radius, scale);
-            p.angularVelocity.multiplyScalar(2.0);
-            this.particles.push(p);
+        let i = 0;
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                // 格子点のXY座標（正面の壁。横=X、縦=Y、中央原点）
+                const bx = -hw + (this.gridFieldW * c) / (cols - 1);
+                const by = this.gridCenterY - hh + (this.gridFieldH * r) / (rows - 1);
+                this.gridBaseX[i] = bx;
+                this.gridBaseY[i] = by;
 
-            this._setRandomRockCharcoalColor(this._colorTmp);
-            this.instancedMeshManager.setColorAt(i, this._colorTmp);
-            this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, p.scale);
+                // 立方体サイズ（岩の欠片らしくランダム）。部屋スケールに対して粒を小さめに。
+                let worldR;
+                const sizeRand = Math.random();
+                if (sizeRand < 0.7) worldR = 20 + Math.random() * 16;
+                else if (sizeRand < 0.95) worldR = 36 + Math.random() * 24;
+                else worldR = 62 + Math.random() * 34;
+
+                const scale = new THREE.Vector3(worldR, worldR, worldR);
+                const radius = Math.max(scale.x, scale.y, scale.z) * 0.5;
+                const p = new Scene02Particle(bx, by, this.gridCenterZ, radius, scale);
+                p.angularVelocity.multiplyScalar(2.0);
+                this.particles.push(p);
+
+                this._setRandomRockCharcoalColor(this._colorTmp);
+                this.instancedMeshManager.setColorAt(i, this._colorTmp);
+                this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, p.scale);
+                i++;
+            }
         }
         this.instancedMeshManager.markColorsNeedsUpdate();
         this.instancedMeshManager.markNeedsUpdate();
         this.setParticleCount(n);
     }
 
-    updatePhysics(deltaTime) {
-        const subSteps = 2;
-        const dt = deltaTime / subSteps;
-        const halfSize = 4950;
-        const tempVec = new THREE.Vector3();
-        const visibleCount = Math.min(this.currentVisibleCount || 0, this.particles.length);
+    /** 現在の歪み強度（常時ゆるく + 鳴ってる時に増幅）。グリッドと赤い印で共有 */
+    _warpAmp() {
+        // 床スケール(9000)に合わせて大きめ。expand等で gridWarpLevel が乗る
+        return 120 + this.gridWarpLevel * 220;
+    }
 
-        for (let s = 0; s < subSteps; s++) {
-            this.grid.clear();
-            for (let i = 0; i < visibleCount; i++) {
-                const p = this.particles[i];
-                const gx = Math.floor(p.position.x / this.gridSize);
-                const gy = Math.floor(p.position.y / this.gridSize);
-                const gz = Math.floor(p.position.z / this.gridSize);
-                const key = (gx + 100) + (gy + 100) * 200 + (gz + 100) * 40000;
-                if (!this.grid.has(key)) this.grid.set(key, []);
-                this.grid.get(key).push(i);
-            }
+    /**
+     * track10: Z方向の押し出しパルス（衝撃波）を1発生成する。
+     *  - velocity = 押し出しの強さ（Z変位の大きさ）
+     *  - durationMs = 影響範囲の広さ（押し出しが及ぶ半径）
+     *  - 方向 = 前後どちらかランダム（手前 Z+ / 奥 Z-）
+     * 発生後はゆっくり減衰して壁が元の平らな状態に戻る。
+     */
+    _fireWarpPulse(velocity, durationMs) {
+        const v = Math.max(0, Math.min(127, velocity)) / 127;
+        const durSec = durationMs > 0 ? durationMs / 1000 : 0.6;
+        // 発生位置：壁面上のランダムな一点
+        const hw = this.gridFieldW * 0.5;
+        const hh = this.gridFieldH * 0.5;
+        const x = -hw + this._rand() * this.gridFieldW;
+        const y = (this.gridCenterY - hh) + this._rand() * this.gridFieldH;
+        // 方向：前後どちらかランダム（手前 Z+ / 奥 Z-）
+        const dir = this._rand() < 0.5 ? 1 : -1;
+        // 強さ：velocity で補間 / 範囲：duration に比例
+        const amp = this.pulseAmpMin + (this.pulseAmpMax - this.pulseAmpMin) * v;
+        const radius = this.pulseRadiusMin + this.pulseRadiusPerSec * durSec;
+        // 寿命：押し出し量が大きいほど少しだけ長く残す（最低でも少し残る）
+        const maxLife = 0.9 + durSec * 0.6 + v * 0.8;
 
-            for (let idx = 0; idx < visibleCount; idx++) {
-                const p = this.particles[idx];
+        this.warpPulses.push({ x, y, dir, amp, radius, life: maxLife, maxLife });
+        while (this.warpPulses.length > this.warpPulseMax) this.warpPulses.shift();
+    }
 
-                if (this.currentMode === this.MODE_DRIFT_FIELD) {
-                    const x = p.position.x;
-                    const y = p.position.y;
-                    const z = p.position.z;
-                    const tt = this.time;
-                    const fx =
-                        Math.sin(y * 0.0011 + tt * 0.37) * Math.cos(z * 0.00085 + tt * 0.21);
-                    const fy =
-                        Math.sin(z * 0.001 + tt * 0.29) * Math.cos(x * 0.00092 + tt * 0.18);
-                    const fz =
-                        Math.sin(x * 0.00115 + tt * 0.33) * Math.cos(y * 0.00088 + tt * 0.24);
-                    tempVec.set(fx, fy, fz).multiplyScalar(38 * p.strayFactor);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_UPTHRUST) {
-                    p.velocity.multiplyScalar(0.97);
-                    tempVec.set(0, 14 * p.strayFactor, 0);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_HELIX_RAIL) {
-                    const R = 820 * p.strayRadiusOffset;
-                    const pitch = 0.42;
-                    const theta = idx * 0.12 + p.phaseOffset * 0.4 + this.time * 0.38;
-                    const ty = (theta * pitch * 180) % 4200 - 400;
-                    const tx = Math.cos(theta) * R;
-                    const tz = Math.sin(theta) * R;
-                    p.velocity.y *= 0.9;
-                    const spiralSpringK = 0.048 * p.strayFactor;
-                    tempVec.set((tx - p.position.x) * spiralSpringK, 0, (tz - p.position.z) * spiralSpringK);
-                    p.addForce(tempVec);
-                    const hSpring = 0.035 * p.strayFactor;
-                    tempVec.set(0, (ty - p.position.y) * hSpring, 0);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_LEMNISCATE) {
-                    const t = this.time * 0.52 + idx * 0.0012 + p.phaseOffset;
-                    const a = 900 * p.strayRadiusOffset;
-                    const tx = (a * Math.sin(t)) / (1 + Math.sin(t) * Math.sin(t));
-                    const ty = 700 + a * 0.5 * Math.sin(t) * Math.cos(t);
-                    const tz = a * 0.55 * Math.sin(2 * t + 0.3);
-                    const springK = 0.012 * p.strayFactor;
-                    tempVec.set((tx - p.position.x) * springK, (ty - p.position.y) * springK, (tz - p.position.z) * springK);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_HONEYCOMB) {
-                    const q = idx % 56;
-                    const r = Math.floor(idx / 56) % 44;
-                    const size = 95;
-                    const tx = size * (1.5 * q) + p.targetOffset.x * 0.04;
-                    const tz = size * (0.5 * Math.sqrt(3) * q + Math.sqrt(3) * r) + p.targetOffset.z * 0.04;
-                    const ty = (q * 0.12 + r * 0.09) * 55 + 520 + p.targetOffset.y * 0.05;
-                    const wallSpringK = 0.011 * p.strayFactor;
-                    tempVec.set((tx - p.position.x) * wallSpringK, (ty - p.position.y) * wallSpringK, (tz - p.position.z) * wallSpringK);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_BEAT_INTERFERENCE) {
-                    const w1 = 1.07;
-                    const w2 = 1.19;
-                    const cols = Math.floor(Math.sqrt(this.sphereCount));
-                    const spacing = 4200 / cols;
-                    const tx = ((idx % cols) - cols * 0.5) * spacing + p.targetOffset.x * 0.06;
-                    const tz = (Math.floor(idx / cols) - cols * 0.5) * spacing + p.targetOffset.z * 0.06;
-                    const ty =
-                        820 +
-                        Math.sin(w1 * this.time + idx * 0.07) * 520 * p.strayRadiusOffset +
-                        Math.sin(w2 * this.time + idx * 0.11) * 380 * p.strayRadiusOffset;
-                    const waveSpringK = 0.01 * p.strayFactor;
-                    tempVec.set((tx - p.position.x) * waveSpringK, (ty - p.position.y) * waveSpringK, (tz - p.position.z) * waveSpringK);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_BINARY_ROTATE) {
-                    const t = this.time * 0.24;
-                    const cx = Math.cos(t) * 780;
-                    const cz = Math.sin(t) * 780;
-                    const c1x = cx;
-                    const c1z = cz;
-                    const c2x = -cx;
-                    const c2z = -cz;
-                    const soft = 120;
-                    const d1 = Math.hypot(p.position.x - c1x, p.position.z - c1z) + soft;
-                    const d2 = Math.hypot(p.position.x - c2x, p.position.z - c2z) + soft;
-                    const pull = 52000 * p.strayFactor;
-                    tempVec.set(
-                        ((c1x - p.position.x) * pull) / (d1 * d1) + ((c2x - p.position.x) * pull) / (d2 * d2),
-                        ((900 - p.position.y) * 0.022 * p.strayFactor),
-                        ((c1z - p.position.z) * pull) / (d1 * d1) + ((c2z - p.position.z) * pull) / (d2 * d2)
-                    );
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_DNA_HELIX) {
-                    const strand = idx % 2;
-                    const along = Math.floor(idx / 2);
-                    const theta = along * 0.065 + this.time * 0.48 + p.phaseOffset;
-                    const R = 340 * p.strayRadiusOffset;
-                    const rise = along * 2.4 - 900;
-                    const tx = Math.cos(theta + strand * Math.PI) * R;
-                    const tz = Math.sin(theta + strand * Math.PI) * R;
-                    const ty = rise + strand * 55 + 1100;
-                    const pillarSpringK = 0.0115 * p.strayFactor;
-                    tempVec.set((tx - p.position.x) * pillarSpringK, (ty - p.position.y) * pillarSpringK, (tz - p.position.z) * pillarSpringK);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_TOROIDAL_VORTEX) {
-                    const xz = Math.sqrt(p.position.x * p.position.x + p.position.z * p.position.z) + 1e-4;
-                    const s = 0.016 * p.strayFactor;
-                    const fx = -p.position.z * s;
-                    const fz = p.position.x * s;
-                    const fy = Math.sin((xz - 820) * 0.0031 + this.time * 0.5) * 0.45 * p.strayFactor;
-                    tempVec.set(fx, fy, fz);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_TRIPLE_WELL) {
-                    const wells = [
-                        [0, 900, 0],
-                        [-520, 750, 420],
-                        [480, 820, -380]
-                    ];
-                    let fx = 0;
-                    let fy = 0;
-                    let fz = 0;
-                    for (let w = 0; w < 3; w++) {
-                        const dx = wells[w][0] - p.position.x;
-                        const dy = wells[w][1] - p.position.y;
-                        const dz = wells[w][2] - p.position.z;
-                        const d = Math.sqrt(dx * dx + dy * dy + dz * dz) + 90;
-                        const pull = (420 * p.strayFactor) / d;
-                        fx += (dx / d) * pull;
-                        fy += (dy / d) * pull;
-                        fz += (dz / d) * pull;
-                    }
-                    tempVec.set(fx, fy, fz);
-                    p.addForce(tempVec);
-                } else if (this.currentMode === this.MODE_PRECESS_ORBIT) {
-                    const t = this.time * 0.44 + idx * 0.0011;
-                    const pre = this.time * 0.1 + p.phaseOffset * 0.2;
-                    const a = 640 * p.strayRadiusOffset;
-                    const b = 400 * p.strayRadiusOffset;
-                    const x0 = Math.cos(pre) * (a * Math.cos(t)) - Math.sin(pre) * (b * Math.sin(t));
-                    const z0 = Math.sin(pre) * (a * Math.cos(t)) + Math.cos(pre) * (b * Math.sin(t));
-                    const y0 = 920 + Math.sin(t * 2.1 + p.phaseOffset) * 220;
-                    const springK = 0.012 * p.strayFactor;
-                    tempVec.set((x0 - p.position.x) * springK, (y0 - p.position.y) * springK, (z0 - p.position.z) * springK);
-                    p.addForce(tempVec);
-                } else {
-                    const tx = p.targetOffset.x;
-                    const ty = p.targetOffset.y + 200;
-                    const tz = p.targetOffset.z;
-                    const defSpringK = 0.0005 * p.strayFactor;
-                    tempVec.set((tx - p.position.x) * defSpringK, (ty - p.position.y) * defSpringK, (tz - p.position.z) * defSpringK);
-                    p.addForce(tempVec);
-                }
-
-                p.update();
-                p.velocity.multiplyScalar(0.95);
-
-                if (this.useWallCollision) {
-                    if (p.position.x > halfSize) { p.position.x = halfSize; p.velocity.x *= -0.3; }
-                    if (p.position.x < -halfSize) { p.position.x = -halfSize; p.velocity.x *= -0.3; }
-                    if (p.position.y > 4500) {
-                        if (this.currentMode === this.MODE_HELIX_RAIL) {
-                            p.position.y = -450;
-                            p.velocity.y *= 0.1;
-                        } else {
-                            p.position.y = 4500;
-                            p.velocity.y *= -0.3;
-                        }
-                    }
-                    if (p.position.y < -450) {
-                        p.position.y = -450;
-                        p.velocity.y *= -0.1;
-                        const rollFactor = 0.05 / (p.radius / 30);
-                        p.angularVelocity.z = -p.velocity.x * rollFactor;
-                        p.angularVelocity.x = p.velocity.z * rollFactor;
-                        p.velocity.x *= 0.98;
-                        p.velocity.z *= 0.98;
-                    }
-                    if (p.position.z > halfSize) { p.position.z = halfSize; p.velocity.z *= -0.3; }
-                    if (p.position.z < -halfSize) { p.position.z = -halfSize; p.velocity.z *= -0.3; }
-                }
-                p.updateRotation(dt);
-            }
+    /** track10 パルスを毎フレーム減衰させる（ゆっくり戻る）。 */
+    _updateWarpPulses(dt) {
+        if (!this.warpPulses.length) return;
+        for (let i = this.warpPulses.length - 1; i >= 0; i--) {
+            const p = this.warpPulses[i];
+            p.life -= dt;
+            if (p.life <= 0) this.warpPulses.splice(i, 1);
         }
+    }
 
-        if (this.instancedMeshManager) {
-            for (let i = 0; i < visibleCount; i++) {
-                const p = this.particles[i];
-                this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, p.scale);
-            }
-            this.instancedMeshManager.markNeedsUpdate();
+    /**
+     * 指定点(bx, by)における track10 パルス由来のZ押し出し量を合算して返す。
+     * 各パルスはガウシアン分布（中心が一番強く、radius で減衰）＋寿命エンベロープ。
+     * @param {number} bx 基準X / @param {number} by 基準Y
+     * @returns {number} Z方向の押し出し量（前後どちらかランダムな符号込み）
+     */
+    _pulseZ(bx, by) {
+        const pulses = this.warpPulses;
+        if (!pulses.length) return 0;
+        let z = 0;
+        for (let i = 0; i < pulses.length; i++) {
+            const p = pulses[i];
+            const dx = bx - p.x;
+            const dy = by - p.y;
+            const d2 = dx * dx + dy * dy;
+            // ガウシアン：中心が一番強く、radius で滑らかに減衰
+            const falloff = Math.exp(-d2 / (p.radius * p.radius));
+            if (falloff < 0.002) continue;
+            // 寿命エンベロープ：立ち上がりは速く、戻りはゆっくり（イーズアウト）
+            const k = p.life / p.maxLife;            // 1(発生)→0(消滅)
+            const env = k * k;                        // 二乗でゆっくり戻る
+            z += p.dir * p.amp * falloff * env;
+        }
+        return z;
+    }
+
+    /**
+     * うねりの変位を計算（_updateGridCubes と赤い印で共有）・垂直壁版。
+     * 常時うねりはやめ、基本は平らな壁。track10 のパルス(_pulseZ)で局所的に
+     * 手前/奥(Z)へ押し出され、しばらくしてゆっくり戻る。
+     * 待機時はごく僅かに呼吸（idleBreathAmp）させて生き物感を残す。
+     * 同じ式を使うことで、赤い印・波形・シリンダーが押し出される壁にピタッと乗る。
+     * @param {number} bx 基準X / @param {number} by 基準Y
+     * @param {number} amp うねり強度（_warpAmp。待機微揺れの増幅に使用） / @param {number} t 時刻
+     * @param {{x:number,y:number,z:number}} out 結果（ワールド座標）を書き込むスクラッチ
+     */
+    _gridWarp(bx, by, amp, t, out) {
+        // 横・縦はほぼ動かさない（壁の格子感を保つ）。待機時のごく僅かな呼吸だけ。
+        const breath = this.idleBreathAmp;
+        out.x = bx + Math.sin(bx * 0.0009 + by * 0.0007 + t * 0.5) * breath;
+        out.y = by + Math.cos(by * 0.0009 - bx * 0.0007 + t * 0.6) * breath;
+        // Z：待機時のごく僅かな呼吸 ＋ track10 パルスの押し出し（本体）
+        const idleZ = Math.sin(bx * 0.0011 - by * 0.0009 + t * 0.7) * breath;
+        out.z = this.gridCenterZ + idleZ + this._pulseZ(bx, by);
+        return out;
+    }
+
+    /**
+     * グリッド立方体を毎フレーム更新：各立方体を _gridWarp の結果へ移動し、回転は維持。
+     */
+    _updateGridCubes(dt) {
+        if (!this.instancedMeshManager || !this.gridBaseX) return;
+        const t = this.time;
+        const amp = this._warpAmp();
+        const n = this.particles.length;
+        const w = this._warpScratch;
+        for (let i = 0; i < n; i++) {
+            const p = this.particles[i];
+            this._gridWarp(this.gridBaseX[i], this.gridBaseY[i], amp, t, w);
+            p.position.set(w.x, w.y, w.z);
+            p.updateRotation(dt);
+            this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, p.scale);
+        }
+        this.instancedMeshManager.markNeedsUpdate();
+    }
+
+    /**
+     * 赤い菱形マーカー◆をうねる壁に追従させる（X/Y/Zすべて壁と同じ歪みに乗せる）。
+     * 各マーカーは _spawnCross で基準座標(baseX/baseY)を保持しているので、毎フレーム
+     * グリッドと同じ式で変位を計算して位置を更新する。
+     */
+    _updateCrossesOnGround(dt = 0.016) {
+        if (!this.crossPool.length) return;
+        const t = this.time;
+        const amp = this._warpAmp();
+        const w = this._warpScratch;
+        for (const cross of this.crossPool) {
+            if (!cross.visible || cross.userData.baseX === undefined) continue;
+            this._gridWarp(cross.userData.baseX, cross.userData.baseY, amp, t, w);
+            // 壁面のすぐ手前(カメラ側=Z+)に浮かせる
+            cross.position.set(w.x, w.y, w.z + 120);
+            // ゆっくり自転させて立体の反射を効かせる
+            const spin = cross.userData.spin || 0.4;
+            cross.rotation.y += spin * dt;
+            cross.rotation.x += spin * 0.4 * dt;
         }
     }
 
     triggerExpandEffect(velocity = 127) {
         const center = new THREE.Vector3(
-            (Math.random() - 0.5) * this.spawnRadius * 0.4,
-            (Math.random() - 0.5) * this.spawnRadius * 0.4,
-            (Math.random() - 0.5) * this.spawnRadius * 0.4
+            (Math.random() - 0.5) * this.gridFieldW * 0.4,
+            this.gridCenterY + (Math.random() - 0.5) * this.gridFieldH * 0.4,
+            this.gridCenterZ
         );
-        const explosionRadius = 2000;
+        const explosionRadius = 2200;
         const vFactor = velocity / 127.0;
         const explosionForce = 250.0 * vFactor;
+
+        // うねりレベルを一時的に増幅（音に合わせて床が盛り上がる）
+        this.gridWarpLevel = Math.min(2.0, this.gridWarpLevel + vFactor * 1.2);
 
         this.particles.forEach((p) => {
             const diff = p.position.clone().sub(center);
             const dist = diff.length();
             if (dist < explosionRadius) {
                 const strength = Math.pow(1.0 - dist / explosionRadius, 2.0) * explosionForce;
-                p.addForce(diff.normalize().multiplyScalar(strength));
+                // 立方体の回転に勢いをつける（位置はグリッドに固定なので回転で表現）
+                p.angularVelocity.x += (Math.random() - 0.5) * 0.05 * strength * 0.01;
+                p.angularVelocity.y += (Math.random() - 0.5) * 0.05 * strength * 0.01;
+                p.angularVelocity.z += (Math.random() - 0.5) * 0.05 * strength * 0.01;
             }
         });
     }
@@ -711,85 +630,31 @@ export class Scene09 extends SceneBase {
         }
     }
 
-    applyCameraModeForMovement() {
-        const cp = this.cameraParticles[this.currentCameraIndex];
-        if (!cp) return;
-        const mode = this.currentMode;
-        switch (mode) {
-            case this.MODE_DRIFT_FIELD:
-                cp.applyPreset('DEFAULT');
-                break;
-            case this.MODE_UPTHRUST:
-                cp.applyPreset('LOOK_UP');
-                break;
-            case this.MODE_HELIX_RAIL:
-                cp.applyPreset('SKY_HIGH');
-                break;
-            case this.MODE_LEMNISCATE:
-                cp.applyPreset('WIDE_VIEW', { distance: 2900 });
-                break;
-            case this.MODE_HONEYCOMB:
-                cp.applyPreset('FRONT_SIDE', { z: 1600, x: 3100 });
-                break;
-            case this.MODE_BEAT_INTERFERENCE:
-                cp.applyPreset('DRONE_SURFACE', { y: -280 });
-                break;
-            case this.MODE_BINARY_ROTATE:
-                cp.applyPreset('WIDE_VIEW', { distance: 3200 });
-                break;
-            case this.MODE_DNA_HELIX:
-                cp.applyPreset('PILLAR_WALK');
-                break;
-            case this.MODE_TOROIDAL_VORTEX:
-                cp.applyPreset('CHAOTIC');
-                break;
-            case this.MODE_TRIPLE_WELL:
-                cp.applyPreset('WIDE_VIEW', { distance: 2100 });
-                break;
-            case this.MODE_PRECESS_ORBIT:
-                cp.applyPreset('WIDE_VIEW', { distance: 2750 });
-                break;
-            default:
-                cp.applyPreset('DEFAULT');
-                break;
-        }
-    }
-
     switchCameraRandom() {
         let newIndex = this.currentCameraIndex;
-        while (newIndex === this.currentCameraIndex) {
+        while (newIndex === this.currentCameraIndex && this.cameraParticles.length > 1) {
             newIndex = Math.floor(Math.random() * this.cameraParticles.length);
         }
         this.currentCameraIndex = newIndex;
         const cp = this.cameraParticles[this.currentCameraIndex];
+        if (!cp) return;
         this.cameraParticles.forEach((p) => {
-            p.minDistance = 400;
-            p.maxDistance = 2000;
+            p.minDistance = 4500;
+            p.maxDistance = 10000;
             p.boxMin = null;
             p.boxMax = null;
             p.maxSpeed = 8.0;
         });
-        const angle1 = Math.random() * Math.PI * 2;
-        const angle2 = Math.random() * Math.PI;
-        const dist = 1000 + Math.random() * 2000;
+        // 壁を正面〜斜め前から見る（裏や真上に回り込まない）。スタジオ無しだがやや寄せ気味。
+        const dist = 6000 + Math.random() * 3500;     // 6000〜9500（やや寄せ）
+        const yaw = (Math.random() - 0.5) * Math.PI * 0.55;   // 左右に±約50度
+        const pitch = (Math.random() - 0.1) * 0.5;            // ほぼ水平〜やや見下ろし
         cp.position.set(
-            Math.cos(angle1) * Math.sin(angle2) * dist,
-            Math.sin(angle1) * Math.sin(angle2) * dist + 500,
-            Math.cos(angle2) * dist
+            Math.sin(yaw) * Math.cos(pitch) * dist,
+            this.gridCenterY + Math.sin(pitch) * dist,
+            Math.cos(yaw) * Math.cos(pitch) * dist          // 常に手前(Z+)側
         );
-        cp.applyRandomForce();
-    }
-
-    _smoothCenterFromParticles(dt) {
-        const n = Math.min(this.currentVisibleCount || 0, this.particles.length);
-        if (n <= 0) return;
-        this._tmpV.set(0, 0, 0);
-        for (let i = 0; i < n; i++) {
-            this._tmpV.add(this.particles[i].position);
-        }
-        this._tmpV.multiplyScalar(1 / n);
-        const a = 1 - Math.exp(-Math.min(dt, 0.1) * 2.8);
-        this._centerSmoothed.lerp(this._tmpV, a);
+        cp.applyRandomForce?.();
     }
 
     async setup() {
@@ -798,6 +663,7 @@ export class Scene09 extends SceneBase {
 
         this.useSSAO = false;
 
+        // 他シーン(Scene02/Scene10)と質感を合わせる：影あり＋PCFSoft
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         applyStudioRoomToneAndBackdrop(this.renderer, this.scene, this.sceneLightingScale, {
@@ -806,56 +672,484 @@ export class Scene09 extends SceneBase {
             sceneFogColor: this.sceneFogColor
         });
 
-        if (this.camera.fov < 35 || this.camera.fov > 50) {
-            this.camera.fov = 42;
-        }
+        // スタジオ(部屋)はオフ。距離制約が無いので、巨大グリッド全体を引きで映す。
+        this.camera.fov = 42;
         this.camera.near = 12;
-        this.camera.far = 12000;
+        this.camera.far = 30000;   // 大きく引いた分、奥までクリップしないよう延長
         this.camera.updateProjectionMatrix();
-        this.camera.position.set(0, 1000, 4500);
-        this.camera.lookAt(0, 400, 0);
+        // 横9200×縦5600のグリッド全体が画角に収まるよう引く（やや寄せ気味）。
+        this.camera.position.set(0, this.gridCenterY, 8500);
+        this.camera.lookAt(0, this.gridCenterY, 0);
+        this._centerSmoothed.set(0, this.gridCenterY, this.gridCenterZ);
 
         this._roomEnvPresentation = setupStudioRoomEnvironmentMap(this.renderer, this.scene);
         this.pmremGenerator = this._roomEnvPresentation.pmremGenerator;
         this._roomEnvTexture = this._roomEnvPresentation.envMapTexture;
 
-        this.studio = new StudioBox(
-            this.scene,
-            studioBoxOptionsForStudioRoom(this.sceneLightingScale, this._roomEnvTexture)
-        );
-        if (this.studio.studioBox) {
-            this.studio.studioBox.visible = false;
+        if (this.useStudioBox) {
+            // StudioBox 本来のライティング（濃い影・キースポットのコントラスト）を活かす。
+            // この場合 setupMinimalParticleLights() は呼ばない（影が薄れて質感がズレる）。
+            this.setupLights();
+            this.createStudioBox();
+        } else {
+            // 部屋オフ：StudioBox のライトが無くなるので最小ライトで照らす。
+            this.setupMinimalParticleLights();
         }
-
-        this.buildRoom();
-        this.studio.attachCeilingSpotRig(this.roomGroup, {
-            includeCeilingPlane: false,
-            ...ceilingSpotRigOptionsForStudioRoom(this.sceneLightingScale)
-        });
-        const floorMat = this.roomGroup.children[0].material;
-        const wallMat = this.roomGroup.children[1].material;
-        applyStudioRoomFloorWallEnvMaps(wallMat, floorMat);
-
-        this.setupLights();
-
-        this.setupAirNoiseVolume();
 
         this.createSpheres();
         this._applyEnvMapToSphereMaterial();
 
-        if (this.calloutSystem) this.calloutSystem.setScene(this.scene);
+        // ---- コールアウト（3Dワールドに浮かぶ立体ラベル）----
+        if (this.calloutSystem) {
+            this.calloutSystem.setScene(this.scene);
+            this.calloutSystem.setUse3DCallouts(true);
+            this.calloutSystem.setLabels([
+                'SCAN_ID: 0x09', 'FREQ: 440.0Hz', 'AMP: -6.0dB', 'SYNC: LOCKED',
+                'CH_01: ACTIVE', 'BIT_RATE: 24/96', 'PHASE: 0.000', 'DATA: STREAM',
+                'NODE: 0x18F', 'SIG: STABLE', 'LAT: 0.4ms', 'CRC: OK',
+                'BUF: 0xFF3A', 'GAIN: +3.2dB', 'SR: 96000', 'CLK: 24.576M',
+                'PTR: 0x00A4', 'SEQ: 1024', 'MOD: PCM', 'DIV: 0x08',
+                'TEMP: 31.4C', 'VREF: 1.024V', 'ERR: 0', 'FLAG: 0b1011',
+                'ADDR: 0x7FE0', 'CNT: 65535', 'HZ: 13.75', 'DBM: -42',
+                'PKT: 0xC1', 'CHKSUM: 0x5E', 'IDX: 0x3F', 'RMS: 0.707',
+            ]);
+            this.calloutReady = true;
+        }
+
+        this._buildCrossPool();
+        this._buildWaves();
 
         this.setupCameraParticleDistances();
         this.initPostProcessing();
         this.initialized = true;
     }
 
+    /** 決定論的PRNG（xorshift） */
+    _rand() {
+        let x = this.seed | 0;
+        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+        this.seed = x;
+        return ((x >>> 0) % 1000000) / 1000000;
+    }
+
+    /** ヒートマップ色（t: 0=青 → シアン → 緑 → 黄 → 赤=1） */
+    _heatColor(t) {
+        t = Math.max(0, Math.min(1, t));
+        const stops = [
+            [0.0, 0.0, 1.0], // 青
+            [0.0, 1.0, 1.0], // シアン
+            [0.0, 1.0, 0.0], // 緑
+            [1.0, 1.0, 0.0], // 黄
+            [1.0, 0.0, 0.0], // 赤
+        ];
+        const seg = t * (stops.length - 1);
+        const i = Math.min(stops.length - 2, Math.floor(seg));
+        const f = seg - i;
+        const a = stops[i], b = stops[i + 1];
+        return new THREE.Color(
+            a[0] + (b[0] - a[0]) * f,
+            a[1] + (b[1] - a[1]) * f,
+            a[2] + (b[2] - a[2]) * f
+        );
+    }
+
+    /**
+     * トラック別波形：1トラック=1本、最大12本をグリッドの上空(waveCenterY)に重ねる。
+     * 細いTubeGeometryで3D化＝蛇のような波形。色はヒートマップ(track1=青…track12=赤)。
+     */
+    _buildWaves() {
+        const hw = this.waveFieldW * 0.5;
+        const n = this.waveSegments;
+
+        this._waveCurvePts = [];
+        for (let i = 0; i < n; i++) this._waveCurvePts.push(new THREE.Vector3());
+
+        for (let w = 0; w < this.trackCount; w++) {
+            const pos = new Float32Array(n * 3);
+            for (let i = 0; i < n; i++) {
+                const x = -hw + (this.waveFieldW * i) / (n - 1);
+                pos[i * 3 + 0] = x;
+                pos[i * 3 + 1] = this.waveCenterY;
+                pos[i * 3 + 2] = (w - this.trackCount / 2) * 40; // 段ごとにZ方向へずらして立体的に
+            }
+            const color = this._heatColor(w / (this.trackCount - 1));
+            const mat = new THREE.MeshBasicMaterial({
+                color,
+                transparent: true,
+                opacity: 0.9,
+                blending: THREE.AdditiveBlending,  // 重なると明るく（ヒートマップ感）
+                depthWrite: false,
+            });
+            const geo = this._buildTubeGeometry(pos);
+            const mesh = new THREE.Mesh(geo, mat);
+            this.scene.add(mesh);
+
+            this.waveLines.push(mesh);
+            this.wavePositions.push(pos);
+
+            this.trackVoice.push({
+                env: 0.0,
+                freq: 1.5 + w * 0.5,
+                amp: 0.5,
+                decay: 1.8,
+                phase: this._rand(),
+            });
+        }
+    }
+
+    /**
+     * track8: 波形の中心(Y=gridCenterY, Z=0)を貫く X軸シリンダーを発射する。
+     *  - duration（durationMs）= シリンダーの長さ
+     *  - velocity = 色（ヒートマップ青→赤）と太さ（半径）
+     * 寿命(duration)経過でフェードアウトして消える。
+     */
+    _fireTrack8Cylinder(velocity, durationMs) {
+        const v = Math.max(0, Math.min(127, velocity)) / 127;
+
+        // 太さ：velocity で補間
+        const radius = this.track8RadiusMin + (this.track8RadiusMax - this.track8RadiusMin) * v;
+        // 長さ：duration（秒）に比例（最低長さ＋秒あたり伸び）
+        const durSec = durationMs > 0 ? durationMs / 1000 : 0.6;
+        const length = this.track8LenMin + this.track8LenPerSec * durSec;
+        // 色：velocity をヒートマップ（弱い=青→強い=赤）
+        const color = this._heatColor(v);
+
+        // Tube方式で作る（グリッドと同じうねりに乗せて曲げるため。直線シリンダーでは曲げられない）
+        const mat = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.95,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        });
+        const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+        this.scene.add(mesh);
+
+        // 寿命は duration（最低でも少し残す）。走行は寿命に合わせて左→右へ進める。
+        const maxLife = Math.max(0.5, durSec);
+        const c = {
+            mesh,
+            life: maxLife,
+            maxLife,
+            radius,
+            length,
+            phase: this._rand() * 100,   // 独自うねりの位相（本ごとにずらす）
+        };
+        this.track8Cylinders.push(c);
+        this._rebuildTrack8Geometry(c);  // 初期形状
+
+        // 上限を超えたら古いものから消す
+        while (this.track8Cylinders.length > this.track8MaxCount) {
+            const old = this.track8Cylinders.shift();
+            this._disposeTrack8Cylinder(old);
+        }
+    }
+
+    /**
+     * track8 シリンダー1本の Tube ジオメトリを現在の走行位置・うねりで作り直す。
+     * 各点を _gridWarp（グリッドと同じうねり）に乗せ、さらに独自のうねりを足す。
+     */
+    _rebuildTrack8Geometry(c) {
+        const SEG = 40;                                 // Tube 分解能
+        const half = c.length * 0.5;
+        // 走行：progress 0→1 で中心Xが左端(-fieldHalf)→右端(+fieldHalf)へ動く
+        const fieldHalf = this.waveFieldW * 0.5;
+        const progress = 1 - c.life / c.maxLife;        // 0(発射)→1(消滅)
+        const centerX = -fieldHalf + this.waveFieldW * progress;
+        const amp = this._warpAmp();
+        const t = this.time;
+        const w = this._warpScratch;
+
+        const pts = [];
+        for (let i = 0; i < SEG; i++) {
+            const s = i / (SEG - 1);                     // 0→1（シリンダーに沿って）
+            const x = centerX - half + c.length * s;    // 中心Xを基準に左右へ伸ばす
+            // グリッドと同じうねり（波形中心の高さ gridCenterY 上で評価）
+            this._gridWarp(x, this.gridCenterY, amp, t, w);
+            // 独自のうねりを Z に上乗せ（グリッドうねり＋独自うねり）
+            const ownZ =
+                Math.sin(s * 5.0 * Math.PI + t * 4.0 + c.phase) * (60 + amp * 0.5) +
+                Math.sin(s * 2.0 * Math.PI - t * 2.5 + c.phase * 0.7) * 40;
+            pts.push(new THREE.Vector3(w.x, w.y, w.z + ownZ));
+        }
+        const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+        const geo = new THREE.TubeGeometry(curve, SEG - 1, c.radius, 16, false);
+        c.mesh.geometry.dispose();
+        c.mesh.geometry = geo;
+    }
+
+    /** track8 シリンダーを毎フレーム：左→右へ走らせ、うねらせ、寿命で消す。 */
+    _updateTrack8Cylinders(dt) {
+        if (!this.track8Cylinders.length) return;
+        for (let i = this.track8Cylinders.length - 1; i >= 0; i--) {
+            const c = this.track8Cylinders[i];
+            c.life -= dt;
+            if (c.life <= 0) {
+                this._disposeTrack8Cylinder(c);
+                this.track8Cylinders.splice(i, 1);
+                continue;
+            }
+            // 走行＋うねりを反映してジオメトリを作り直す
+            this._rebuildTrack8Geometry(c);
+            // 寿命の後半でフェードアウト
+            const tt = c.life / c.maxLife;                // 1→0
+            c.mesh.material.opacity = 0.95 * Math.min(1, tt * 1.6);
+        }
+    }
+
+    /** track8 シリンダー1本の破棄（geo/mat 解放＋シーンから除去）。 */
+    _disposeTrack8Cylinder(c) {
+        if (!c?.mesh) return;
+        this.scene.remove(c.mesh);
+        c.mesh.geometry?.dispose();
+        c.mesh.material?.dispose();
+    }
+
+    /** 波形点列(Float32Array) から TubeGeometry を作る */
+    _buildTubeGeometry(pos) {
+        const n = this.waveSegments;
+        for (let i = 0; i < n; i++) {
+            this._waveCurvePts[i].set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+        }
+        const curve = new THREE.CatmullRomCurve3(this._waveCurvePts, false, 'catmullrom', 0.5);
+        return new THREE.TubeGeometry(curve, n - 1, this.waveTubeRadius, 8, false);
+    }
+
+    /**
+     * トラックイベントでそのトラックの波形を発音させる（オーディオリアクティブの核）。
+     */
+    _addVoice(note, velocity, track) {
+        const idx = track - 1;
+        if (idx < 0 || idx >= this.trackVoice.length) return;
+        const v = Math.max(0, Math.min(127, velocity)) / 127;
+        const vo = this.trackVoice[idx];
+        vo.freq = 1.0 + (note % 24) * 0.18 + idx * 0.12;
+        vo.env = 0.5 + v * 0.7;
+        vo.decay = 2.4 - v * 1.4;
+        vo.phase = this._rand();
+    }
+
+    /**
+     * トラック別波形を毎フレーム更新：各トラックのエンベロープを減衰させ、
+     * 鳴ってる波形ほど大きく不透明に。Tubeを作り直して蛇のようにくねらせる。
+     */
+    _updateWaves(dt) {
+        if (!this.waveLines.length) return;
+        this.wavePhase += dt;
+        const maxSpan = 700;   // 波形の最大振れ幅（床スケールに合わせて大きめ）
+        let bus = 0.0;
+
+        for (let w = 0; w < this.trackCount; w++) {
+            const pos = this.wavePositions[w];
+            const line = this.waveLines[w];
+            const vo = this.trackVoice[w];
+            const n = this.waveSegments;
+
+            vo.env *= Math.exp(-vo.decay * dt);
+            vo.phase += vo.freq * dt;
+            bus += vo.env;
+
+            const idle = 18;   // 鳴ってない時のうっすら揺れ
+            const amp = idle + vo.env * maxSpan;
+            line.material.opacity = 0.18 + Math.min(0.8, vo.env) * 0.8;
+
+            const baseZ = (w - this.trackCount / 2) * 40;
+            // 周波数を抑えて山数を減らし、なめらかな大きいうねりにする
+            const sFreq = 0.6 + (vo.freq - 1.0) * 0.45;   // 元の約半分の周波数
+            // ---- 前後(Z)うねり：グリッドの _gridWarp と同じ大うねりをベースに乗せる ----
+            // track8 シリンダー(_rebuildTrack8Geometry)と同じ発想で、グリッドのZ波を共有し、
+            // その上に波形ごとの小さなゆらぎ(jitter)を足して「大体は揃うが各波形ごとにゆれる」。
+            const warpAmp = this._warpAmp();              // グリッドと同じうねり強度
+            const jitterAmp = 90 + this.busLevel * 120;   // 波形ごとの独自ゆらぎ（鳴ると増幅）
+            const jPhase = this.time * 0.6 + w * 0.7;     // 波形ごとに位相をずらす
+            const ww = this._warpScratch;
+            for (let i = 0; i < n; i++) {
+                const t = i / (n - 1);
+                // ゆっくりした位相うねり（高周波成分は抑える）
+                const organic =
+                    Math.sin(t * 1.6 + this.time * 0.5 + w) * 0.30 +
+                    Math.sin(t * 0.9 - this.time * 0.35 + w * 0.7) * 0.18;
+                // 基音のみで構成（高周波の倍音は弱めて滑らかに）
+                const wv =
+                    Math.sin((t * sFreq + vo.phase + organic) * Math.PI * 2) * 0.92 +
+                    Math.sin((t * sFreq * 2.0 + vo.phase * 1.3) * Math.PI * 2) * 0.06;
+                const x = pos[i * 3 + 0];
+                pos[i * 3 + 1] = this.waveCenterY + wv * amp;
+                // グリッドと同じうねり(_gridWarp)をこの点の高さで評価し、そのZを基準にする。
+                // → 全波形が「大体グリッドと同じ」位置でうねる。
+                this._gridWarp(x, pos[i * 3 + 1], warpAmp, this.time, ww);
+                // 各波形ごとの小さなゆらぎ(jitter)を上乗せ：大体は揃うが少しゆれる。
+                const jitter =
+                    Math.sin(t * 1.4 * Math.PI * 2 + jPhase) * 0.7 +
+                    Math.sin(t * 0.6 * Math.PI * 2 - jPhase * 0.8) * 0.3;
+                pos[i * 3 + 2] = ww.z + baseZ + jitter * jitterAmp;
+            }
+            const newGeo = this._buildTubeGeometry(pos);
+            line.geometry.dispose();
+            line.geometry = newGeo;
+        }
+        this.busLevel += (Math.min(2.0, bus) - this.busLevel) * Math.min(1, 8 * dt);
+        // 波形の鳴り合計をグリッドのうねりにも反映（音で床も波打つ）
+        this.gridWarpLevel = Math.max(this.gridWarpLevel, this.busLevel * 0.6);
+    }
+
+    /**
+     * 赤い立体菱形マーカー◆のメッシュプール（床グリッドに乗せる）。
+     * 平面のLineではなく、八面体(立体菱形)＋発光する赤メタル質感にして立方体と馴染ませる。
+     * IBL反射(envMap)も乗せるので、ガラス/宝石っぽい赤い印になる。
+     * 積み上げ式（消さない）なのでプールは多め。
+     */
+    _buildCrossPool() {
+        this.crossGroup = new THREE.Group();
+        this.scene.add(this.crossGroup);
+
+        const s = this.crossSize;                 // 八面体の半径（床スケール用に大きめ）
+        const env = this.scene?.environment || null;
+        // 共有ジオメトリ（八面体＝立体の菱形◆）。各マーカーで使い回す。
+        const octGeo = new THREE.OctahedronGeometry(s, 0);
+        const coreGeo = new THREE.IcosahedronGeometry(s * 0.32, 0);
+        this._crossGeos = [octGeo, coreGeo];
+
+        for (let i = 0; i < this.crossMax; i++) {
+            const group = new THREE.Group();
+            // 外殻：半透明の赤メタル（宝石っぽく反射＋発光）
+            const shellMat = new THREE.MeshPhysicalMaterial({
+                color: 0xff1418,
+                metalness: 0.6,
+                roughness: 0.18,
+                clearcoat: 0.9,
+                clearcoatRoughness: 0.12,
+                envMap: env,
+                envMapIntensity: 1.6,
+                emissive: 0xff0008,
+                emissiveIntensity: 0.9,
+                transparent: true,
+                opacity: 0.0,
+                depthWrite: false,
+                fog: true
+            });
+            const shell = new THREE.Mesh(octGeo, shellMat);
+            // 中心コア：強く光る不透明な芯（点光源っぽい存在感）
+            const coreMat = new THREE.MeshBasicMaterial({
+                color: 0xff5050,
+                transparent: true,
+                opacity: 0.0,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+            const core = new THREE.Mesh(coreGeo, coreMat);
+            group.add(shell);
+            group.add(core);
+            group.visible = false;
+            group.userData.shellMat = shellMat;
+            group.userData.coreMat = coreMat;
+            this.crossGroup.add(group);
+            this.crossPool.push(group);
+        }
+    }
+
+    /** ランダムな格子点のXYワールド座標（壁面の基準座標）を返す（.x=横, .y=縦） */
+    _randomGridPoint() {
+        const hw = this.gridFieldW * 0.5;
+        const hh = this.gridFieldH * 0.5;
+        const ci = Math.floor(this._rand() * (this.gridFineCols + 1));
+        const ri = Math.floor(this._rand() * (this.gridFineRows + 1));
+        const x = -hw + (this.gridFieldW * ci) / this.gridFineCols;
+        const y = this.gridCenterY - hh + (this.gridFieldH * ri) / this.gridFineRows;
+        return new THREE.Vector3(x, y, 0);
+    }
+
+    /** 細グリッド交点にスナップ（XY壁面） */
+    _snapToGrid(x, y) {
+        const hw = this.gridFieldW * 0.5;
+        const hh = this.gridFieldH * 0.5;
+        const cellW = this.gridFieldW / this.gridFineCols;
+        const cellH = this.gridFieldH / this.gridFineRows;
+        let ci = Math.round((x + hw) / cellW);
+        let ri = Math.round((y - (this.gridCenterY - hh)) / cellH);
+        ci = Math.max(0, Math.min(this.gridFineCols, ci));
+        ri = Math.max(0, Math.min(this.gridFineRows, ri));
+        return new THREE.Vector3(-hw + ci * cellW, (this.gridCenterY - hh) + ri * cellH, 0);
+    }
+
+    /**
+     * イベント間隔に応じた格子点を返す。
+     * 前回からの間隔が短いほど前回位置の近傍（小さい半径）、長いほど壁全体。
+     * @param {number} track トラック番号（track別に前回位置を保持）
+     */
+    _clusteredGridPoint(track) {
+        const now = this.time;
+        const last = this.lastEvtTime[track];
+        const lastPos = this.lastEvtPos[track];
+
+        let p;
+        if (last === undefined || lastPos === undefined || (now - last) >= this.clusterFarTime) {
+            p = this._randomGridPoint();
+        } else {
+            const gap = Math.max(0, now - last);
+            const ratio = gap / this.clusterFarTime;     // 0〜1
+            const minR = this.gridFieldW / this.gridCoarseCols;   // 1セル
+            const maxR = this.gridFieldW * 0.5;
+            const radius = minR + (maxR - minR) * ratio;
+            const ang = this._rand() * Math.PI * 2;
+            const dist = this._rand() * radius;
+            const x = lastPos.x + Math.cos(ang) * dist;
+            const y = lastPos.y + Math.sin(ang) * dist;
+            p = this._snapToGrid(x, y);
+        }
+
+        this.lastEvtTime[track] = now;
+        this.lastEvtPos[track] = p.clone();
+        return p;
+    }
+
+    /**
+     * 赤い立体菱形マーカー◆を壁グリッド上に1つ点灯。
+     * 積み上げ式：消さずに残す。プールが尽きたら一番古いものを再利用（FIFO）。
+     */
+    _spawnCross() {
+        let cross = this.crossPool.find(c => !c.visible);
+        if (!cross) {
+            cross = this.crossPool[this._crossNext % this.crossPool.length];
+            this._crossNext++;
+        }
+        const p = this._clusteredGridPoint(1);   // track1: 間隔が短いほど近接配置
+        // 基準座標を保持（毎フレーム壁の歪みに追従させるため）。.x=横, .y=縦
+        cross.userData.baseX = p.x;
+        cross.userData.baseY = p.y;
+        cross.position.set(p.x, p.y, this.gridCenterZ + 120);   // 初期位置。次フレームから壁に追従
+        // 立体感を出すためランダムに傾ける＋ゆっくり自転させる
+        cross.rotation.set(this._rand() * Math.PI, this._rand() * Math.PI, this._rand() * Math.PI);
+        cross.userData.spin = 0.3 + this._rand() * 0.6;
+        cross.visible = true;
+        if (cross.userData.shellMat) cross.userData.shellMat.opacity = 0.85;
+        if (cross.userData.coreMat) cross.userData.coreMat.opacity = 0.95;
+    }
+
+    /** ランダムなデータ文字列を1つ生成（高速切替テキスト用） */
+    _randomDataString() {
+        const keys = ['FREQ', 'AMP', 'CH', 'BUF', 'PTR', 'SEQ', 'CRC', 'HZ',
+            'DBM', 'PKT', 'IDX', 'RMS', 'CLK', 'SR', 'GAIN', 'TMP', 'VREF', 'ERR'];
+        const k = keys[Math.floor(this._rand() * keys.length)];
+        const r = this._rand();
+        let val;
+        if (r < 0.4) {
+            val = '0x' + Math.floor(this._rand() * 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+        } else if (r < 0.7) {
+            val = (this._rand() * 1000).toFixed(this._rand() < 0.5 ? 1 : 3);
+        } else {
+            val = '0b' + Math.floor(this._rand() * 256).toString(2).padStart(8, '0');
+        }
+        return `${k}:${val}`;
+    }
+
     setupCameraParticleDistance(cameraParticle) {
-        cameraParticle.minDistance = 750;
-        cameraParticle.maxDistance = 4850;
-        cameraParticle.maxDistanceReset = 4500;
-        cameraParticle.minY = -200;
-        cameraParticle.maxY = 4500;
+        // スタジオ無し。横9200×縦5600のグリッドをやや寄せ気味に映す距離感（部屋制約なし）。
+        cameraParticle.minDistance = 4500;
+        cameraParticle.maxDistance = 10000;
+        cameraParticle.maxDistanceReset = 9500;
+        cameraParticle.minY = STUDIO_FLOOR_TOP_Y;
+        cameraParticle.maxY = 6500;
         cameraParticle.initializePosition?.();
     }
 
@@ -885,90 +1179,54 @@ export class Scene09 extends SceneBase {
             }
         }
 
-        this.modeTimer += deltaTime;
-        if (this.modeTimer >= this.modeInterval) {
-            this.modeTimer = 0;
-            const weights = [1.0, 1.2, 1.5, 1.5, 1.0, 1.0, 1.2, 1.0, 0.8, 1.5, 1.05];
-            const unvisitedModes = [];
-            for (let i = 0; i < this.totalModeCount; i++) {
-                if (!this.modeHistory.has(i)) unvisitedModes.push(i);
-            }
-            let nextMode = -1;
-            if (unvisitedModes.length > 0) {
-                let subTotalWeight = 0;
-                unvisitedModes.forEach((m) => { subTotalWeight += weights[m]; });
-                let random = Math.random() * subTotalWeight;
-                for (const m of unvisitedModes) {
-                    if (random < weights[m]) {
-                        nextMode = m;
-                        break;
-                    }
-                    random -= weights[m];
-                }
-                if (nextMode === -1) nextMode = unvisitedModes[0];
-            } else {
-                const totalWeight = weights.reduce((a, b) => a + b, 0);
-                let random = Math.random() * totalWeight;
-                for (let i = 0; i < weights.length; i++) {
-                    if (random < weights[i]) {
-                        nextMode = i;
-                        break;
-                    }
-                    random -= weights[i];
-                }
-                if (nextMode === this.currentMode) {
-                    nextMode = (nextMode + 1) % this.totalModeCount;
-                }
-            }
-            this.currentMode = nextMode;
-            this.modeHistory.add(nextMode);
-            if (this.modeHistory.size >= this.totalModeCount) {
-                this.modeHistory.clear();
-                this.modeHistory.add(this.currentMode);
-            }
-            this.useGravity = false;
-            this.spiralMode = this.currentMode === this.MODE_HELIX_RAIL;
-            this.torusMode = false;
-            this.applyCameraModeForMovement();
-            if (this.currentMode === this.MODE_UPTHRUST) {
-                this.particles.forEach((part) => {
-                    if (part.velocity.y < 0) part.velocity.y *= 0.65;
-                });
-            } else if (this.currentMode === this.MODE_HELIX_RAIL) {
-                this.particles.forEach((p) => {
-                    const rr = Math.random() * this.spawnRadius;
-                    const theta = Math.random() * Math.PI * 2;
-                    const phi = Math.random() * Math.PI;
-                    p.position.set(
-                        rr * Math.sin(phi) * Math.cos(theta),
-                        p.spiralHeightFactor * 5000 - 500,
-                        rr * Math.sin(phi) * Math.sin(theta)
-                    );
-                    p.velocity.set(0, 0, 0);
-                });
-            }
-        }
+        // うねりレベルを徐々に減衰（expand等で上がったぶんを戻す）
+        this.gridWarpLevel *= Math.exp(-0.8 * deltaTime);
 
-        this.updatePhysics(deltaTime);
+        // ---- track10: Z押し出しパルスの寿命更新（ゆっくり戻る）----
+        this._updateWarpPulses(deltaTime);
+
+        // ---- グリッド立方体をうねらせる（位置 = _gridWarp、回転は維持）----
+        this._updateGridCubes(deltaTime);
+
+        // ---- 赤い立体菱形マーカー：積み上げ式（消さない）。うねる床に追従＋自転 ----
+        this._updateCrossesOnGround(deltaTime);
+
+        // ---- トラック別オシロ波形：1トラック1本を上空に重ねる（音反応）----
+        this._updateWaves(deltaTime);
+
+        // ---- track8: 波形の中心を貫くシリンダーの寿命更新（フェードアウト＆破棄）----
+        this._updateTrack8Cylinders(deltaTime);
+
         this.updateExpandSpheres();
-        this._smoothCenterFromParticles(deltaTime);
         this.updateCamera();
 
-        if (this.airNoiseMaterial?.uniforms?.uTime) {
-            this.airNoiseMaterial.uniforms.uTime.value = this.time;
-        }
-
-        /** Scene21 と同型：固定 DOF（オートフォーカスでピント域が狭く見えるのを防ぐ） */
-        const mainInst = this.instancedMeshManager?.getMainMesh();
-        const focusTargets = [this.roomGroup, mainInst].filter(Boolean);
-        if (this.useAutoFocusDOF) {
-            this.updateAutoFocus(focusTargets);
+        /**
+         * オブジェクト(立方体グリッド)にピントを合わせる。
+         * SceneBase.updateAutoFocus は画面中央レイキャスト方式だが、格子の中心は隙間で
+         * 空振りしてピントが定位置に固定されがち。ここではグリッド中心(_centerSmoothed)
+         * までのカメラ距離を直接フォーカスにして、確実にグリッド面へピントを合わせる。
+         */
+        if (this.useAutoFocusDOF && this.useDOF && this.bokehPass?.uniforms?.focus) {
+            const targetFocus = this.camera.position.distanceTo(this._centerSmoothed);
+            const u = this.bokehPass.uniforms.focus;
+            u.value += (targetFocus - u.value) * 0.1;   // なめらかに追従
         } else if (this.bokehPass?.uniforms?.focus) {
             this.bokehPass.uniforms.focus.value = this.dofParams.focus;
         }
         updateSsaoDistanceAttenuation(this, this._centerSmoothed);
 
-        if (this.calloutSystem) {
+        // ---- コールアウト：表示中のテキストを高速で矢継ぎ早に差し替える ----
+        if (this.calloutReady && this.calloutSystem) {
+            this.calloutTextTick += deltaTime;
+            if (this.calloutTextTick >= this.calloutTextInterval) {
+                this.calloutTextTick = 0;
+                for (const co of this.calloutSystem.callouts) {
+                    if (co.textCharCount > 0) {
+                        co.labelText = this._randomDataString();
+                        co.textCharCount = co.labelText.length;  // 全文表示
+                    }
+                }
+            }
             this.calloutSystem.update(deltaTime, this.time, this.camera, {
                 autoGenerate: false,
                 maxCount: 8,
@@ -1002,8 +1260,80 @@ export class Scene09 extends SceneBase {
         if (this.trackEffects[6]) this.triggerExpandEffect(velocity);
     }
 
+    /**
+     * OSCを直接横取りする（重要）。
+     * ラボの SceneBase.handleOSC は track1 を「カメラ切替」として処理し return してしまうため、
+     * このシーンでは handleOSC を上書きして track1/track5 を自前で処理する。
+     * track2/3/4・/phase・/tick・track6(expand) は super.handleOSC に委譲する。
+     */
+    handleOSC(message) {
+        const trackNumber = message?.trackNumber;
+        const args = message?.args || [];
+        const note = args.length > 0 ? Number(args[0]) : 60;
+        const velocity = args.length > 1 ? Number(args[1]) : 100;
+        const durationMs = args.length > 2 ? Number(args[2]) : 0;
+
+        // --- 全トラックのノートを波形ボイスとして登録（オーディオリアクティブ）---
+        if (trackNumber >= 1 && trackNumber <= this.trackCount) {
+            this._addVoice(note, velocity, trackNumber);
+        }
+
+        // --- track1: 赤い菱形マーカー◇（クラスタリング配置）＋カメラランダマイズ ---
+        //     マーカーは常に出す。カメラ切替はトグル（trackEffects[1]）ON時のみ。
+        if (trackNumber === 1) {
+            this._spawnCross();
+            // うねりに少し勢いを足す
+            this.gridWarpLevel = Math.min(2.0, this.gridWarpLevel + 0.25);
+            if (this.trackEffects[1]) this.switchCameraRandom();
+            return;
+        }
+
+        // --- track5: 立方体の上空に3Dコールアウトを1個 ---
+        if (trackNumber === 5) {
+            if (this.calloutReady && this.calloutSystem) {
+                // 床の格子点を選び、うねりに乗せた座標の上空に浮かせる（3Dワールド配置）
+                const p = this._clusteredGridPoint(5);
+                const w = this._warpScratch;
+                this._gridWarp(p.x, p.z, this._warpAmp(), this.time, w);
+                const worldPos = new THREE.Vector3(w.x, w.y + 600 + this._rand() * 500, w.z);
+                const duration = durationMs > 0 ? Math.max(4.0, durationMs / 1000) : (5.0 + this._rand() * 3.0);
+                this.calloutSystem.createCallout({ worldPos, time: this.time, duration });
+            }
+            return;
+        }
+
+        // --- track8: 波形の中心を貫く X軸シリンダー（オフ）---
+        if (trackNumber === 8) {
+            return;
+        }
+
+        // --- track10: Z方向の押し出しパルス（衝撃波）---
+        //     velocity=強さ / duration=範囲の広さ / 方向=前後ランダム。
+        //     壁が押し出され、しばらくしてゆっくり戻る。波形もこの押し出しに乗る。
+        if (trackNumber === 10) {
+            this._fireWarpPulse(velocity, durationMs);
+            return;
+        }
+
+        // それ以外（track2/3/4 のエフェクト、track6 expand、/phase、/tick など）は親に委譲
+        super.handleOSC(message);
+    }
+
     initPostProcessing() {
-        setupPostEffectsPipeline(this, {});
+        // 他シーン(Scene02)と同じボケ味・ブルーム量に揃える。
+        // パイプライン既定(focus:2100, aperture:0.0000012, maxblur:0.0028, bloom:0.14)は
+        // 立方体が遠くボケすぎるので、Scene02 相当の控えめ被写界深度＋やや強めブルームに。
+        setupPostEffectsPipeline(this, {
+            dofFocus: 500,
+            dofAperture: 0.000005,
+            dofMaxBlur: 0.003,
+            bloomStrength: 0.2,
+            bloomRadius: 0.1,
+            bloomThreshold: 1.2
+        });
+        // track2 を全画面フラッシュ（ストロボ）にするためのパス
+        attachStrobeFlashPass(this);
+        this.applyTrackEffectsToPostPasses();
     }
 
     onResize() {
@@ -1015,51 +1345,17 @@ export class Scene09 extends SceneBase {
         this.initialized = false;
         this.scene.fog = null;
 
-        if (this.airNoiseVolume) {
-            this.scene.remove(this.airNoiseVolume);
-            if (this.airNoiseVolume.geometry) this.airNoiseVolume.geometry.dispose();
-            this.airNoiseVolume = null;
-        }
-        if (this.airNoiseMaterial) {
-            this.airNoiseMaterial.dispose();
-            this.airNoiseMaterial = null;
-        }
-
-        if (this.promoWallFillLight) {
-            this.scene.remove(this.promoWallFillLight);
-            this.promoWallFillLight.dispose();
-            this.promoWallFillLight = null;
-        }
-        if (this.promoWallLightTarget) {
-            this.scene.remove(this.promoWallLightTarget);
-            this.promoWallLightTarget = null;
-        }
-
-        if (this.roomGroup) {
-            this.scene.remove(this.roomGroup);
-            const seenMats = new Set();
-            const seenTex = new Set();
-            this.roomGroup.traverse((o) => {
-                if (o.geometry) o.geometry.dispose();
-                if (o.material && !seenMats.has(o.material)) {
-                    seenMats.add(o.material);
-                    const m = o.material;
-                    for (const t of [m.map, m.bumpMap, m.normalMap, m.roughnessMap, m.aoMap]) {
-                        if (t && !seenTex.has(t)) {
-                            seenTex.add(t);
-                            t.dispose();
-                        }
-                    }
-                    m.dispose();
-                }
-            });
-            this.roomGroup = null;
-        }
-        this.ceilingMesh = null;
-
         if (this.studio) {
             this.studio.dispose();
             this.studio = null;
+        }
+
+        if (this._minimalLights) {
+            for (const light of this._minimalLights) {
+                this.scene.remove(light);
+                light.dispose?.();
+            }
+            this._minimalLights = null;
         }
 
         if (this.ssaoPass && this.composer) {
@@ -1093,7 +1389,45 @@ export class Scene09 extends SceneBase {
             this.instancedMeshManager = null;
         }
         this.particles = [];
-        this.grid?.clear();
+        this.gridBaseX = null;
+        this.gridBaseZ = null;
+
+        // トラック別波形を破棄
+        for (const line of this.waveLines) {
+            if (line.geometry) line.geometry.dispose();
+            if (line.material) line.material.dispose();
+            if (this.scene) this.scene.remove(line);
+        }
+        this.waveLines = [];
+        this.wavePositions = [];
+        this.trackVoice = [];
+        this._waveCurvePts = [];
+
+        // track8 シリンダーを破棄
+        for (const c of this.track8Cylinders) this._disposeTrack8Cylinder(c);
+        this.track8Cylinders = [];
+
+        // track10 パルスをクリア
+        this.warpPulses = [];
+
+        // 赤い立体菱形マーカープールを破棄（ジオメトリは共有なのでマテリアルのみ個別解放）
+        for (const marker of this.crossPool) {
+            if (marker.userData.shellMat) marker.userData.shellMat.dispose();
+            if (marker.userData.coreMat) marker.userData.coreMat.dispose();
+        }
+        if (this._crossGeos) {
+            for (const g of this._crossGeos) g.dispose();
+            this._crossGeos = null;
+        }
+        if (this.crossGroup && this.scene) this.scene.remove(this.crossGroup);
+        this.crossGroup = null;
+        this.crossPool = [];
+
+        // コールアウトを片付ける
+        if (this.calloutSystem) {
+            this.calloutSystem.callouts = [];
+            this.calloutSystem.lastCalloutTime = 0;
+        }
 
         disposeStudioRoomEnvironmentMap(
             { pmremGenerator: this.pmremGenerator, envMapTexture: this._roomEnvTexture },

@@ -213,12 +213,15 @@ export class Scene09 extends SceneBase {
         // ---- イベント間隔クラスタリング（短い間隔ほど前回位置の近くに出す）----
         this.lastEvtTime = {};
         this.lastEvtPos = {};
+        this._lastExpandPos = null; // track12 の最後のパルス位置（コールアウト用）
         this.clusterFarTime = 0.6;
 
         // ---- 擬似乱数（離散更新用シード）----
         this.seed = 0x9e3779b9 | 0;
         this._warpScratch = { x: 0, y: 0, z: 0 };
         this._scaleScratch = new THREE.Vector3();
+        this._dofCamDir = new THREE.Vector3();
+        this._dofToTarget = new THREE.Vector3();
     }
 
     setupMinimalParticleLights() {
@@ -459,7 +462,7 @@ export class Scene09 extends SceneBase {
                 const scale = new THREE.Vector3(worldR, worldR, worldR);
                 const radius = Math.max(scale.x, scale.y, scale.z) * 0.5;
                 const p = new Scene02Particle(bx, by, this.gridCenterZ, radius, scale);
-                p.angularVelocity.multiplyScalar(2.0);
+                p.angularVelocity.multiplyScalar(8.0);
                 this.particles.push(p);
 
                 this._setRandomRockCharcoalColor(this._colorTmp);
@@ -503,19 +506,21 @@ export class Scene09 extends SceneBase {
         }
 
         const maxSegs = this._gridLineSegs.length;
-        const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 5, 1);
-        this._gridLineMat = new THREE.MeshPhysicalMaterial({
-            color: 0xffffff,
-            metalness: 0.7,
-            roughness: 0.2,
+        // 各セグメント = 頂点2つ（セグメントごとに始点・終点）
+        const positions = new Float32Array(maxSegs * 6);
+        const colors = new Float32Array(maxSegs * 6);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        this._gridLineMat = new THREE.LineBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.85,
+            depthWrite: false,
         });
-        this._gridLineMesh = new THREE.InstancedMesh(cylGeo, this._gridLineMat, maxSegs);
-        this._gridLineMesh.count = maxSegs;
+        this._gridLineMesh = new THREE.LineSegments(geo, this._gridLineMat);
         this._gridLineMesh.frustumCulled = false;
-        this._gridLineMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(maxSegs * 3), 3);
         this.scene.add(this._gridLineMesh);
-        this._gridLineDummy = new THREE.Object3D();
-        this._gridLineUp = new THREE.Vector3(0, 1, 0);
         this._gridLineCol = { r: 0, g: 0, b: 0 };
         this._gridLineColorTmp = new THREE.Color();
     }
@@ -524,35 +529,31 @@ export class Scene09 extends SceneBase {
         if (!this._gridLineMesh || !this._gridLineSegs) return;
         const t = this.time;
         const amp = this._warpAmp();
-        const dummy = this._gridLineDummy;
-        const up = this._gridLineUp;
         const tmp0 = { x: 0, y: 0, z: 0 };
         const tmp1 = { x: 0, y: 0, z: 0 };
-        const radius = 6.0; // シリンダーの太さ
-
         const heatMax = this.pulseAmpMax * 2.0;
         const col = this._gridLineCol;
-        const colorTmp = this._gridLineColorTmp;
+        const geo = this._gridLineMesh.geometry;
+        const pos = geo.attributes.position.array;
+        const clr = geo.attributes.color.array;
 
         for (let i = 0; i < this._gridLineSegs.length; i++) {
             const seg = this._gridLineSegs[i];
             this._gridWarp(seg.ax, seg.ay, amp, t, tmp0);
             this._gridWarp(seg.bx, seg.by, amp, t, tmp1);
-            const dx = tmp1.x - tmp0.x, dy = tmp1.y - tmp0.y, dz = tmp1.z - tmp0.z;
-            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001;
-            dummy.position.set((tmp0.x + tmp1.x) * 0.5, (tmp0.y + tmp1.y) * 0.5, (tmp0.z + tmp1.z) * 0.5);
-            dummy.quaternion.setFromUnitVectors(up, new THREE.Vector3(dx / dist, dy / dist, dz / dist));
-            dummy.scale.set(radius, dist, radius);
-            dummy.updateMatrix();
-            this._gridLineMesh.setMatrixAt(i, dummy.matrix);
-            // 端点のZ変位量（実変位ベース）でヒートマップ色を決定
+
+            const base = i * 6;
+            pos[base + 0] = tmp0.x; pos[base + 1] = tmp0.y; pos[base + 2] = tmp0.z;
+            pos[base + 3] = tmp1.x; pos[base + 4] = tmp1.y; pos[base + 5] = tmp1.z;
+
+            // 端点の平均Z変位量でヒートマップ色
             const dispZ = Math.abs(((tmp0.z + tmp1.z) * 0.5) - this.gridCenterZ);
             this._heatmapColor(dispZ / heatMax, col);
-            colorTmp.setRGB(col.r, col.g, col.b);
-            this._gridLineMesh.setColorAt(i, colorTmp);
+            clr[base + 0] = col.r; clr[base + 1] = col.g; clr[base + 2] = col.b;
+            clr[base + 3] = col.r; clr[base + 4] = col.g; clr[base + 5] = col.b;
         }
-        this._gridLineMesh.instanceMatrix.needsUpdate = true;
-        this._gridLineMesh.instanceColor.needsUpdate = true;
+        geo.attributes.position.needsUpdate = true;
+        geo.attributes.color.needsUpdate = true;
     }
 
     /** 現在の歪み強度（常時ゆるく + 鳴ってる時に増幅）。グリッドと赤い印で共有 */
@@ -786,12 +787,39 @@ export class Scene09 extends SceneBase {
         const w = this._warpScratch;
         const bm = this._cubeBoostMap;
         const decay = this._cubeBoostDecay * dt;
+        // Z変位量から余波回転を加算するスケール係数
+        const pulseMax = this.pulseAmpMax * 2.0;
+        const rotImpactScale = 0.0008;
+        // angularVelocity の摩擦（普段はゆっくり、衝撃後にスピンして減衰）
+        const angFriction = Math.exp(-1.8 * dt);
 
         for (let i = 0; i < n; i++) {
             const p = this.particles[i];
             const bx = this.gridBaseX[i], by = this.gridBaseY[i];
             this._gridWarp(bx, by, amp, t, w);
             p.position.set(w.x, w.y, w.z);
+
+            // Z変位量（パルス＋implode合算）を余波回転として angularVelocity に加算
+            const pz = this._pulseZ(bx, by);
+            const implodeW = { x: 0, y: 0, z: 0 };
+            this._implodeXYZ(bx, by, implodeW);
+            const impulse = (Math.abs(pz) + Math.abs(implodeW.z)) / pulseMax;
+            if (impulse > 0.001) {
+                // 各パーティクルで少し方向をばらけさせる（iベースのオフセット）
+                const angle = (i * 2.399) % (Math.PI * 2); // 黄金角で均一分布
+                p.angularVelocity.x += Math.cos(angle) * impulse * rotImpactScale;
+                p.angularVelocity.y += Math.sin(angle) * impulse * rotImpactScale;
+                p.angularVelocity.z += Math.cos(angle + 1.1) * impulse * rotImpactScale * 0.5;
+            }
+            // track8 ブーストも回転に波及
+            if (bm && bm[i] > 0.05) {
+                const ba = (i * 1.618) % (Math.PI * 2);
+                p.angularVelocity.x += Math.cos(ba) * bm[i] * rotImpactScale * 2.0;
+                p.angularVelocity.y += Math.sin(ba) * bm[i] * rotImpactScale * 2.0;
+            }
+            // 摩擦で減衰（ベース回転速度は維持）
+            p.angularVelocity.multiplyScalar(angFriction);
+
             p.updateRotation(dt);
 
             // track8 ブースト：個別減衰 → スケールに掛ける（bm[i]=0 なら等倍）
@@ -838,19 +866,21 @@ export class Scene09 extends SceneBase {
         const pulseCount = 3;
         const hw = this.gridFieldW * 0.3;
         const hh = this.gridFieldH * 0.3;
+        let lastX = 0, lastY = this.gridCenterY;
         for (let i = 0; i < pulseCount; i++) {
             const x = (Math.random() - 0.5) * hw * 2;
             const y = this.gridCenterY + (Math.random() - 0.5) * hh * 2;
-            // 強さ：velocity フル換算、範囲は短く絞る（duration=200ms相当）
+            lastX = x; lastY = y;
             const v = vFactor;
             const amp = (this.pulseAmpMin + (this.pulseAmpMax - this.pulseAmpMin) * v) * 2.0;
             const durSec = 0.05;
             const radius = this.pulseRadiusMin + this.pulseRadiusPerSec * durSec;
             const maxLife = 2.0 + v * 1.5;
-            // 手前固定（Z+方向）
             this.warpPulses.push({ x, y, dir: 1, amp, radius, life: maxLife, maxLife });
             while (this.warpPulses.length > this.warpPulseMax) this.warpPulses.shift();
         }
+        // 最後のパルス位置をコールアウト用に保持
+        this._lastExpandPos = { x: lastX, y: lastY };
     }
 
     updateExpandSpheres() {
@@ -1543,9 +1573,14 @@ export class Scene09 extends SceneBase {
          * までのカメラ距離を直接フォーカスにして、確実にグリッド面へピントを合わせる。
          */
         if (this.useAutoFocusDOF && this.useDOF && this.bokehPass?.uniforms?.focus) {
-            const targetFocus = this.camera.position.distanceTo(this._centerSmoothed);
+            // カメラ視線方向に射影した距離でフォーカスを決定する。
+            // distanceTo(_centerSmoothed) は斜め視点で奥に引っ張られるため、
+            // 視線ベクトルへの投影距離（カメラ→注視点の「前方成分」）を使う。
+            this._dofCamDir.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
+            this._dofToTarget.copy(this._centerSmoothed).sub(this.camera.position);
+            const targetFocus = Math.max(100, this._dofToTarget.dot(this._dofCamDir));
             const u = this.bokehPass.uniforms.focus;
-            u.value += (targetFocus - u.value) * 0.5;   // なめらかに追従
+            u.value += (targetFocus - u.value) * 0.5;
         } else if (this.bokehPass?.uniforms?.focus) {
             this.bokehPass.uniforms.focus.value = this.dofParams.focus;
         }
@@ -1624,16 +1659,38 @@ export class Scene09 extends SceneBase {
             return;
         }
 
-        // --- track5: 立方体の上空に3Dコールアウトを1個 ---
+        // --- track5: コールアウトをtrack12の直前発火位置付近に出す ---
         if (trackNumber === 5) {
             if (this.calloutReady && this.calloutSystem) {
-                // 床の格子点を選び、うねりに乗せた座標の上空に浮かせる（3Dワールド配置）
-                const p = this._clusteredGridPoint(5);
-                const w = this._warpScratch;
-                this._gridWarp(p.x, p.z, this._warpAmp(), this.time, w);
-                const worldPos = new THREE.Vector3(w.x, w.y + 600 + this._rand() * 500, w.z);
+                // track12の最後のパルス位置を基準にランダムオフセット、なければグリッド点
+                let bx, by;
+                if (this._lastExpandPos) {
+                    const spread = this.gridFieldW * 0.12;
+                    bx = this._lastExpandPos.x + (this._rand() - 0.5) * spread * 2;
+                    by = this._lastExpandPos.y + (this._rand() - 0.5) * spread * 2;
+                } else {
+                    const p = this._clusteredGridPoint(5);
+                    bx = p.x; by = p.y;
+                }
+                const yOffset = 600 + this._rand() * 500;
+                // 初期位置
+                const scratch = { x: 0, y: 0, z: 0 };
+                this._gridWarp(bx, by, this._warpAmp(), this.time, scratch);
+                const worldPos = new THREE.Vector3(scratch.x, scratch.y + yOffset, scratch.z);
                 const duration = durationMs > 0 ? Math.max(4.0, durationMs / 1000) : (5.0 + this._rand() * 3.0);
-                this.calloutSystem.createCallout({ worldPos, time: this.time, duration });
+                // refreshWorldPos でモーフィング・うねりに毎フレーム追従
+                const self = this;
+                const cbx = bx, cby = by, cyOffset = yOffset;
+                this.calloutSystem.createCallout({
+                    worldPos,
+                    time: this.time,
+                    duration,
+                    refreshWorldPos: () => {
+                        const w2 = { x: 0, y: 0, z: 0 };
+                        self._gridWarp(cbx, cby, self._warpAmp(), self.time, w2);
+                        return new THREE.Vector3(w2.x, w2.y + cyOffset, w2.z);
+                    }
+                });
             }
             return;
         }
@@ -1698,11 +1755,12 @@ export class Scene09 extends SceneBase {
         // 立方体が遠くボケすぎるので、Scene02 相当の控えめ被写界深度＋やや強めブルームに。
         setupPostEffectsPipeline(this, {
             dofFocus: 500,
-            dofAperture: 0.0000003,
+            dofAperture: 0.000005,
             dofMaxBlur: 0.003,
             bloomStrength: 0.2,
             bloomRadius: 0.1,
-            bloomThreshold: 1.2
+            bloomThreshold: 1.2,
+            filmGrainIntensity: 0.35,
         });
         // track2 を全画面フラッシュ（ストロボ）にするためのパス
         attachStrobeFlashPass(this);

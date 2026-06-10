@@ -35,7 +35,10 @@ export class StudioAtmosphere {
             count: options.particleCount ?? 2000,
             lifetimeMs: options.particleLifetimeMs ?? 11000,
             fadeOutMs: options.particleFadeOutMs ?? 1400,
-            minLivingBurst: options.minLivingBurst ?? 180
+            minLivingBurst: options.minLivingBurst ?? 180,
+            particleColor: options.particleColor,
+            opacity: options.opacity,
+            sizeScale: options.sizeScale ?? 1.0
         });
 
         // 空気ノイズボリューム

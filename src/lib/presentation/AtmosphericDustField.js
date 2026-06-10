@@ -36,6 +36,7 @@ export class AtmosphericDustField {
         this.particleCount = options.count ?? 2000;
         this.lifetimeMs = options.lifetimeMs ?? 11000;
         this.fadeOutMs = options.fadeOutMs ?? 1400;
+        this.options = options;
 
         this.instManager = null;
         this.particles = [];
@@ -113,16 +114,11 @@ export class AtmosphericDustField {
         for (let k = 0; k < n; k++) {
             const i = this._freeSlots.pop();
             const ap = this.particles[i];
-            const jr = 38 + Math.random() * 220;
-            const th = Math.random() * Math.PI * 2;
-            const ph = Math.acos(2 * Math.random() - 1);
-            const jx = jr * Math.sin(ph) * Math.cos(th);
-            const jy = jr * Math.cos(ph) * 0.82;
-            const jz = jr * Math.sin(ph) * Math.sin(th);
-            ap.position.set(worldPos.x + jx, worldPos.y + jy, worldPos.z + jz);
-            ap.position.x = THREE.MathUtils.clamp(ap.position.x, -bx, bx);
-            ap.position.z = THREE.MathUtils.clamp(ap.position.z, -bz, bz);
-            ap.position.y = THREE.MathUtils.clamp(ap.position.y, yMin, yMax);
+            ap.position.set(
+                (Math.random() * 2 - 1) * bx,
+                yMin + Math.random() * (yMax - yMin),
+                (Math.random() * 2 - 1) * bz
+            );
             ap.velocity.set(
                 (Math.random() - 0.5) * 150,
                 (Math.random() - 0.5) * 95,
@@ -139,10 +135,11 @@ export class AtmosphericDustField {
                 (Math.random() - 0.5) * 1.9
             );
             const sr = 0.55 + Math.random() * 2.6;
+            const ss = this.options?.sizeScale ?? 1.0;
             ap.baseScale.set(
-                sr * (0.34 + Math.random() * 1.05) * 0.28,
-                sr * (0.34 + Math.random() * 1.05) * 0.28,
-                sr * (0.34 + Math.random() * 1.05) * 0.28
+                sr * (0.34 + Math.random() * 1.05) * 0.28 * ss,
+                sr * (0.34 + Math.random() * 1.05) * 0.28 * ss,
+                sr * (0.34 + Math.random() * 1.05) * 0.28 * ss
             );
             ap.scale.copy(ap.baseScale);
             ap.phase = Math.random() * Math.PI * 2;

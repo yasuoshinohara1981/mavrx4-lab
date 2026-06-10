@@ -8,13 +8,13 @@
  *  - 11モード運動はやめ、立方体をグリッド格子点に固定配置（1立方体 = 1格子点）。
  *  - 毎フレーム _gridWarp の式で床(XZ平面)をうねらせ、立方体の粒でウネリグリッドを表現。
  *  - 立方体の質感（岩色チャコール・metalness・IBL・回転 updateRotation）はそのまま維持。
- *  - DOF/SSAO/Bloom/Fog/カメラ・track6 の expand エフェクトは維持。
+ *  - DOF/SSAO/Bloom/Fog/カメラ・track12 の expand エフェクトは維持。
  *  - 赤い印・コールアウトはうねる立方体面（床グリッド）に乗せて追従。
  *
  * OSC:
  *  - track1: 赤い菱形マーカー◇スポーン ＋（trackEffects[1] ON時）カメラランダマイズ
  *  - track5: コールアウト（床の立方体面に投影）
- *  - track6: 立方体の expand エフェクト（維持。handleTrackNumber で処理）
+ *  - track12: 立方体の expand エフェクト（維持。handleTrackNumber で処理）
  *  - track2/3/4・/phase・/tick は super.handleOSC に委譲
  */
 
@@ -83,7 +83,8 @@ export class Scene09 extends SceneBase {
             6: true,
             7: true,
             8: true,
-            9: true
+            9: true,
+            12: true
         };
         // track2 は色反転エフェクト（ストロボは使わない）。false で SceneBase の色反転分岐に入る。
         this.useTrack2Strobe = false;
@@ -585,29 +586,28 @@ export class Scene09 extends SceneBase {
     }
 
     triggerExpandEffect(velocity = 127) {
-        const center = new THREE.Vector3(
-            (Math.random() - 0.5) * this.gridFieldW * 0.4,
-            this.gridCenterY + (Math.random() - 0.5) * this.gridFieldH * 0.4,
-            this.gridCenterZ
-        );
-        const explosionRadius = 2200;
         const vFactor = velocity / 127.0;
-        const explosionForce = 250.0 * vFactor;
 
-        // うねりレベルを一時的に増幅（音に合わせて床が盛り上がる）
-        this.gridWarpLevel = Math.min(2.0, this.gridWarpLevel + vFactor * 1.2);
+        // gridWarpLevel を一時的に増幅（音に合わせて全体が盛り上がる）
+        this.gridWarpLevel = Math.min(2.0, this.gridWarpLevel + vFactor * 1.5);
 
-        this.particles.forEach((p) => {
-            const diff = p.position.clone().sub(center);
-            const dist = diff.length();
-            if (dist < explosionRadius) {
-                const strength = Math.pow(1.0 - dist / explosionRadius, 2.0) * explosionForce;
-                // 立方体の回転に勢いをつける（位置はグリッドに固定なので回転で表現）
-                p.angularVelocity.x += (Math.random() - 0.5) * 0.05 * strength * 0.01;
-                p.angularVelocity.y += (Math.random() - 0.5) * 0.05 * strength * 0.01;
-                p.angularVelocity.z += (Math.random() - 0.5) * 0.05 * strength * 0.01;
-            }
-        });
+        // 中央付近に強いZ押し出しパルスを複数発射（手前に膨らむ）
+        const pulseCount = 3;
+        const hw = this.gridFieldW * 0.3;
+        const hh = this.gridFieldH * 0.3;
+        for (let i = 0; i < pulseCount; i++) {
+            const x = (Math.random() - 0.5) * hw * 2;
+            const y = this.gridCenterY + (Math.random() - 0.5) * hh * 2;
+            // 強さ：velocity フル換算、範囲は短く絞る（duration=200ms相当）
+            const v = vFactor;
+            const amp = (this.pulseAmpMin + (this.pulseAmpMax - this.pulseAmpMin) * v) * 2.0;
+            const durSec = 0.05;
+            const radius = this.pulseRadiusMin + this.pulseRadiusPerSec * durSec;
+            const maxLife = 2.0 + v * 1.5;
+            // 手前固定（Z+方向）
+            this.warpPulses.push({ x, y, dir: 1, amp, radius, life: maxLife, maxLife });
+            while (this.warpPulses.length > this.warpPulseMax) this.warpPulses.shift();
+        }
     }
 
     updateExpandSpheres() {
@@ -639,14 +639,14 @@ export class Scene09 extends SceneBase {
         const cp = this.cameraParticles[this.currentCameraIndex];
         if (!cp) return;
         this.cameraParticles.forEach((p) => {
-            p.minDistance = 4500;
-            p.maxDistance = 10000;
+            p.minDistance = 8000;
+            p.maxDistance = 20000;
             p.boxMin = null;
             p.boxMax = null;
             p.maxSpeed = 8.0;
         });
-        // 壁を正面〜斜め前から見る（裏や真上に回り込まない）。スタジオ無しだがやや寄せ気味。
-        const dist = 6000 + Math.random() * 3500;     // 6000〜9500（やや寄せ）
+        // 壁を正面〜斜め前から見る（裏や真上に回り込まない）。
+        const dist = 8000 + Math.random() * 12000;    // 8000〜20000
         const yaw = (Math.random() - 0.5) * Math.PI * 0.55;   // 左右に±約50度
         const pitch = (Math.random() - 0.1) * 0.5;            // ほぼ水平〜やや見下ろし
         cp.position.set(
@@ -675,7 +675,7 @@ export class Scene09 extends SceneBase {
         // スタジオ(部屋)はオフ。距離制約が無いので、巨大グリッド全体を引きで映す。
         this.camera.fov = 42;
         this.camera.near = 12;
-        this.camera.far = 30000;   // 大きく引いた分、奥までクリップしないよう延長
+        this.camera.far = 200000;  // 大きく引いた分、奥までクリップしないよう延長
         this.camera.updateProjectionMatrix();
         // 横9200×縦5600のグリッド全体が画角に収まるよう引く（やや寄せ気味）。
         this.camera.position.set(0, this.gridCenterY, 8500);
@@ -1145,9 +1145,9 @@ export class Scene09 extends SceneBase {
 
     setupCameraParticleDistance(cameraParticle) {
         // スタジオ無し。横9200×縦5600のグリッドをやや寄せ気味に映す距離感（部屋制約なし）。
-        cameraParticle.minDistance = 4500;
-        cameraParticle.maxDistance = 10000;
-        cameraParticle.maxDistanceReset = 9500;
+        cameraParticle.minDistance = 50000;
+        cameraParticle.maxDistance = 150000;
+        cameraParticle.maxDistanceReset = 140000;
         cameraParticle.minY = STUDIO_FLOOR_TOP_Y;
         cameraParticle.maxY = 6500;
         cameraParticle.initializePosition?.();
@@ -1156,7 +1156,15 @@ export class Scene09 extends SceneBase {
     updateCamera() {
         if (this.trackEffects[1] && this.cameraParticles[this.currentCameraIndex]) {
             const cp = this.cameraParticles[this.currentCameraIndex];
-            this.camera.position.copy(cp.getPosition());
+            const basePos = cp.getPosition().clone();
+            // 時間ベースのノイズで遠近をゆらゆら（複数周期を重ねて自然なゆらぎに）
+            const t = this.time;
+            const distNoise = Math.sin(t * 0.08) * 1800
+                            + Math.sin(t * 0.031) * 2600
+                            + Math.sin(t * 0.017) * 1200;
+            const toCenter = this._centerSmoothed.clone().sub(basePos).normalize();
+            basePos.addScaledVector(toCenter, distNoise);
+            this.camera.position.copy(basePos);
             this.camera.lookAt(this._centerSmoothed.x, this._centerSmoothed.y, this._centerSmoothed.z);
             this.camera.matrixWorldNeedsUpdate = false;
             return;
@@ -1251,20 +1259,20 @@ export class Scene09 extends SceneBase {
 
     handleTrackNumber(trackNumber, message) {
         const tn = Scene09.parseTrackNumber(trackNumber, message);
-        if (tn !== 6) return;
+        if (tn !== 12) return;
         const args = message.args || [];
         const v1 = args[1] != null ? Number(args[1]) : NaN;
         const v0 = args[0] != null ? Number(args[0]) : NaN;
         let velocity = Number.isFinite(v1) ? v1 : Number.isFinite(v0) ? v0 : 127;
         if (!Number.isFinite(velocity) || velocity <= 0) return;
-        if (this.trackEffects[6]) this.triggerExpandEffect(velocity);
+        if (this.trackEffects[12]) this.triggerExpandEffect(velocity);
     }
 
     /**
      * OSCを直接横取りする（重要）。
      * ラボの SceneBase.handleOSC は track1 を「カメラ切替」として処理し return してしまうため、
      * このシーンでは handleOSC を上書きして track1/track5 を自前で処理する。
-     * track2/3/4・/phase・/tick・track6(expand) は super.handleOSC に委譲する。
+     * track2/3/4・/phase・/tick・track12(expand) は super.handleOSC に委譲する。
      */
     handleOSC(message) {
         const trackNumber = message?.trackNumber;

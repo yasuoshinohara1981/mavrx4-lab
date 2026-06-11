@@ -81,8 +81,8 @@ const SensorFilmGrainShader = {
                 // 合焦域（blurAmt が 0 に近い）でノイズを濃くする。
                 float t = smoothstep(0.0, maxblur * 0.9, blurAmt);
                 
-                // t=0 (ピント面) で 1.4, t=1 (ボケ面) で 0.5 になるように調整
-                dofMod = mix(1.4, 0.5, t); 
+                // t=0 (ピント面) で 1.0, t=1 (ボケ面) で 0.6 になるように調整
+                dofMod = mix(1.0, 0.6, t);
                 focusSharp = 1.0 - t;
             }
 

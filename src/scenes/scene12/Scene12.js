@@ -66,10 +66,10 @@ export class Scene12 extends SceneBase {
         this.ssaoPass = null;
         this.saoPass = null;
         this.aoDepthTexture = null;
-        this.ssaoNearKernelRadius = 9.2;
-        this.ssaoNearMinDistance = 0.018;
-        this.ssaoNearMaxDistance = 0.165;
-        this.ssaoFarAttenuation = 0.62;
+        this.ssaoNearKernelRadius = 5.5;
+        this.ssaoNearMinDistance = 0.006;
+        this.ssaoNearMaxDistance = 0.08;
+        this.ssaoFarAttenuation = 0.38;
         this.outputPass = null;
 
         this.trackEffects = {
@@ -312,7 +312,9 @@ export class Scene12 extends SceneBase {
         }
         this._cornerLamps = [];
 
-        const lampY = this.ceilingY - 600;
+        const tubeHeight = (this.ceilingY - this.floorTopY) * 0.55;
+        // 管の中心を床から tubeHeight/2 の高さに置く
+        const lampY = this.floorTopY + tubeHeight * 0.5;
         const cx = this.roomHalfW - 400;
         const cz = this.roomHalfD - 400;
         const corners = [[cx, lampY, cz], [-cx, lampY, cz], [cx, lampY, -cz], [-cx, lampY, -cz]];
@@ -323,7 +325,7 @@ export class Scene12 extends SceneBase {
                 color: 0xfff8e8,
                 emissiveIntensity: 10.5,
                 radius: 28,
-                height: 400,
+                height: tubeHeight,
                 pointIntensity: 45.0,
                 distance: this.roomHalfW * 2.8,
                 decay: 1.2
@@ -1411,10 +1413,10 @@ export class Scene12 extends SceneBase {
 
         // Scene08と同じ設定
         const L = this.sceneLightingScale;
-        this.studio = new StudioBox(
-            this.scene,
-            studioBoxOptionsForStudioRoom(L, this._roomEnvTexture)
-        );
+        this.studio = new StudioBox(this.scene, {
+            ...studioBoxOptionsForStudioRoom(L, this._roomEnvTexture),
+            useLights: false
+        });
         if (this.studio.studioBox) this.studio.studioBox.visible = false;
 
         this.buildRoom();

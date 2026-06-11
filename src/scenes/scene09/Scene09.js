@@ -1762,7 +1762,7 @@ export class Scene09 extends SceneBase {
             bloomStrength: 0.08,
             bloomRadius: 0.1,
             bloomThreshold: 1.4,
-            filmGrainIntensity: 0.35,
+            filmGrainIntensity: 0.65,
         });
         // track2 を全画面フラッシュ（ストロボ）にするためのパス
         attachStrobeFlashPass(this);

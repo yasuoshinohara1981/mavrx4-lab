@@ -19,7 +19,7 @@ import { attachCanvasDragOrbit } from './lib/CanvasDragOrbit.js';
 const IS_DEVELOPMENT_MODE = false;  // 開発時は true に変更
 
 // デフォルトシーンのインデックス（0 = Scene01, … 8 = Scene09, … 11 = Scene12）
-const DEFAULT_SCENE_INDEX = 8;
+const DEFAULT_SCENE_INDEX = 11;
 
 // ============================================
 // 初期化

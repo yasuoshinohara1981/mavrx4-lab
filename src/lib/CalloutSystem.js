@@ -12,6 +12,7 @@ export class CalloutSystem {
         this.scene = null;
         this.callout3DGroup = new THREE.Group();
         this.use3DCallouts = false; // true のとき worldPos 付きコールアウトは3Dメッシュで表示
+        this.scale3D = 5; // 3Dコールアウトのスケール（シーンから上書き可）
         this.labels = [
             "CORE_TEMP: NORMAL", "VOLTAGE: 1.2MV", "PRESSURE: 450kPa", 
             "SYNC_RATE: 98.2%", "FLOW_CTRL: ACTIVE", "CELL_STAT: STABLE",
@@ -135,14 +136,15 @@ export class CalloutSystem {
                 phaseOpacity = 0;
             }
 
-            /** 寿命に応じて全体をゆるくフェード（残りが半分以下から徐々に 0） */
+            /** アニメーション完了後すぐフェードアウト開始（表示維持なし） */
             const mx = Math.max(callout.maxLife, 1e-4);
             const lifeRatio = THREE.MathUtils.clamp(callout.life / mx, 0, 1);
-            const fadeTailFrac = 0.52;
+            const animEndRatio = 1.0 - (animTotalTime / mx);
+            const fadeStartRatio = Math.max(animEndRatio - 0.05, 0.0);
             const lifeFade =
-                lifeRatio >= fadeTailFrac
+                lifeRatio >= fadeStartRatio
                     ? 1
-                    : THREE.MathUtils.smoothstep(lifeRatio / fadeTailFrac, 0, 1);
+                    : THREE.MathUtils.smoothstep(lifeRatio / Math.max(fadeStartRatio, 1e-4), 0, 1);
 
             callout.opacity = THREE.MathUtils.clamp(phaseOpacity * lifeFade, 0, 1);
 
@@ -351,7 +353,7 @@ export class CalloutSystem {
      */
     createCallout3DMesh(callout) {
         const group = new THREE.Group();
-        const scale3D = 5; // 球体半径1300に対して小さめ
+        const scale3D = this.scale3D;
         const r = callout.radius * scale3D;
         const lineLen = callout.lineLen * scale3D;
         const horizLen = callout.horizLen * scale3D;

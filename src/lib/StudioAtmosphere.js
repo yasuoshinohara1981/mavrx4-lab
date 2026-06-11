@@ -44,6 +44,7 @@ export class StudioAtmosphere {
         // 空気ノイズボリューム
         this.airNoiseVolume = null;
         this.airNoiseMaterial = null;
+        this.airNoiseVolumeScale = options.airNoiseVolumeScale ?? 1.0;
         this.setupAirNoiseVolume(options.airNoiseDensity ?? 0.036, options.airNoiseColor ?? new THREE.Color(0xffffff));
     }
 
@@ -51,7 +52,8 @@ export class StudioAtmosphere {
      * 空気ノイズボリューム（フォグのような質感）の構築
      */
     setupAirNoiseVolume(density, color) {
-        const volumeGeo = new THREE.BoxGeometry(this.roomHalfW * 2.6, this.ceilingY * 1.3, this.roomHalfD * 2.6);
+        const s = this.airNoiseVolumeScale;
+        const volumeGeo = new THREE.BoxGeometry(this.roomHalfW * 2.6 * s, this.ceilingY * 1.3 * s, this.roomHalfD * 2.6 * s);
         this.airNoiseMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 uTime: { value: 0.0 },

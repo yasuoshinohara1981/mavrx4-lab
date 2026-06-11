@@ -477,6 +477,8 @@ export class Scene09 extends SceneBase {
 
         // track8 ブーストマップ（各パーティクルの現在ブースト量。0=等倍）
         this._cubeBoostMap = new Float32Array(n);
+        // パルス変位キャッシュ（_updateGridCubesで計算→_updateGridLinesで参照）
+        this._gridPulseCache = new Float32Array(n);
     }
 
     createGridLines() {
@@ -486,14 +488,14 @@ export class Scene09 extends SceneBase {
         const hh = this.gridFieldH * 0.5;
         const stride = 1; // 全格子線を引く
 
-        // セグメント対応表（bx/byペア）
+        // セグメント対応表（bx/byペア＋格子インデックス ai/bi）
         this._gridLineSegs = [];
         for (let r = 0; r < rows; r += stride) {
             for (let c = 0; c < cols - 1; c++) {
                 const bx0 = -hw + (this.gridFieldW * c) / (cols - 1);
                 const bx1 = -hw + (this.gridFieldW * (c + 1)) / (cols - 1);
                 const by = this.gridCenterY - hh + (this.gridFieldH * r) / (rows - 1);
-                this._gridLineSegs.push({ ax: bx0, ay: by, bx: bx1, by });
+                this._gridLineSegs.push({ ax: bx0, ay: by, bx: bx1, by, ai: r * cols + c, bi: r * cols + c + 1 });
             }
         }
         for (let c = 0; c < cols; c += stride) {
@@ -501,7 +503,7 @@ export class Scene09 extends SceneBase {
                 const bx = -hw + (this.gridFieldW * c) / (cols - 1);
                 const by0 = this.gridCenterY - hh + (this.gridFieldH * r) / (rows - 1);
                 const by1 = this.gridCenterY - hh + (this.gridFieldH * (r + 1)) / (rows - 1);
-                this._gridLineSegs.push({ ax: bx, ay: by0, bx: bx, by: by1 });
+                this._gridLineSegs.push({ ax: bx, ay: by0, bx: bx, by: by1, ai: r * cols + c, bi: (r + 1) * cols + c });
             }
         }
 
@@ -514,9 +516,6 @@ export class Scene09 extends SceneBase {
         geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         this._gridLineMat = new THREE.LineBasicMaterial({
             vertexColors: true,
-            transparent: true,
-            opacity: 0.85,
-            depthWrite: false,
         });
         this._gridLineMesh = new THREE.LineSegments(geo, this._gridLineMat);
         this._gridLineMesh.frustumCulled = false;
@@ -533,6 +532,7 @@ export class Scene09 extends SceneBase {
         const tmp1 = { x: 0, y: 0, z: 0 };
         const heatMax = this.pulseAmpMax * 2.0;
         const col = this._gridLineCol;
+        const pc = this._gridPulseCache;
         const geo = this._gridLineMesh.geometry;
         const pos = geo.attributes.position.array;
         const clr = geo.attributes.color.array;
@@ -546,8 +546,8 @@ export class Scene09 extends SceneBase {
             pos[base + 0] = tmp0.x; pos[base + 1] = tmp0.y; pos[base + 2] = tmp0.z;
             pos[base + 3] = tmp1.x; pos[base + 4] = tmp1.y; pos[base + 5] = tmp1.z;
 
-            // 端点の平均Z変位量でヒートマップ色
-            const dispZ = Math.abs(((tmp0.z + tmp1.z) * 0.5) - this.gridCenterZ);
+            // _updateGridCubes で計算済みのキャッシュを参照（重複計算なし）
+            const dispZ = pc ? (pc[seg.ai] + pc[seg.bi]) * 0.5 : 0;
             this._heatmapColor(dispZ / heatMax, col);
             clr[base + 0] = col.r; clr[base + 1] = col.g; clr[base + 2] = col.b;
             clr[base + 3] = col.r; clr[base + 4] = col.g; clr[base + 5] = col.b;
@@ -786,24 +786,26 @@ export class Scene09 extends SceneBase {
         const n = this.particles.length;
         const w = this._warpScratch;
         const bm = this._cubeBoostMap;
+        const pc = this._gridPulseCache;
         const decay = this._cubeBoostDecay * dt;
-        // Z変位量から余波回転を加算するスケール係数
         const pulseMax = this.pulseAmpMax * 2.0;
         const rotImpactScale = 0.0008;
-        // angularVelocity の摩擦（普段はゆっくり、衝撃後にスピンして減衰）
         const angFriction = Math.exp(-1.8 * dt);
-
         for (let i = 0; i < n; i++) {
             const p = this.particles[i];
             const bx = this.gridBaseX[i], by = this.gridBaseY[i];
             this._gridWarp(bx, by, amp, t, w);
             p.position.set(w.x, w.y, w.z);
 
-            // Z変位量（パルス＋implode合算）を余波回転として angularVelocity に加算
-            const pz = this._pulseZ(bx, by);
-            const implodeW = { x: 0, y: 0, z: 0 };
-            this._implodeXYZ(bx, by, implodeW);
-            const impulse = (Math.abs(pz) + Math.abs(implodeW.z)) / pulseMax;
+            // _gridWarp 済みの w.z からモーフのdz・idleZを除いた「パルス成分」をキャッシュ
+            // warpPulses/implodePulses が空なら0固定（スキップ）
+            let pulseDisp = 0;
+            if (this.warpPulses.length > 0 || this.implodePulses.length > 0) {
+                pulseDisp = Math.abs(w.z - this.gridCenterZ - this._getMorphOffset(bx, by).dz);
+            }
+            if (pc) pc[i] = pulseDisp;
+
+            const impulse = pulseDisp / pulseMax;
             if (impulse > 0.001) {
                 // 各パーティクルで少し方向をばらけさせる（iベースのオフセット）
                 const angle = (i * 2.399) % (Math.PI * 2); // 黄金角で均一分布
@@ -1755,11 +1757,11 @@ export class Scene09 extends SceneBase {
         // 立方体が遠くボケすぎるので、Scene02 相当の控えめ被写界深度＋やや強めブルームに。
         setupPostEffectsPipeline(this, {
             dofFocus: 500,
-            dofAperture: 0.000005,
-            dofMaxBlur: 0.003,
-            bloomStrength: 0.2,
+            dofAperture: 0.0000005,
+            dofMaxBlur: 0.0025,
+            bloomStrength: 0.08,
             bloomRadius: 0.1,
-            bloomThreshold: 1.2,
+            bloomThreshold: 1.4,
             filmGrainIntensity: 0.35,
         });
         // track2 を全画面フラッシュ（ストロボ）にするためのパス

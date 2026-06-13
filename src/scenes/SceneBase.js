@@ -492,11 +492,11 @@ export class SceneBase {
                     this.colorInversion.inversionPass.enabled = false;
                 }
             } else {
-                const on = !!this.trackEffects[2];
-                this.colorInversion.setEnabled(on);
+                // 起動時は常にOFF（trackEffects[2]はOSC受付フラグであって初期状態ではない）
+                this.colorInversion.setEnabled(false);
                 this.colorInversion.endTime = 0;
                 if (this.colorInversion.inversionPass) {
-                    this.colorInversion.inversionPass.enabled = on;
+                    this.colorInversion.inversionPass.enabled = false;
                 }
             }
         }

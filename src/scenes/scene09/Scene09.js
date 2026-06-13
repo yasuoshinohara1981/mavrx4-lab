@@ -121,7 +121,7 @@ export class Scene09 extends SceneBase {
         this.ambientMinLiving = 120;
 
         // ---- 電子確率雲のパラメータ ----
-        this.particleCount2 = 3000;             // パーティクル総数（塩感と軽さのバランス）
+        this.particleCount2 = 5000;             // パーティクル総数
         this.cloudRadius = 1100;                // 雲の代表スケール
         this.cloudCenterY = STUDIO_FLOOR_TOP_Y + 2600; // 雲の中心高さ（部屋中央やや上）
         this.instancedMeshManager = null;
@@ -482,9 +482,9 @@ export class Scene09 extends SceneBase {
             // ランダムサイズ（70%小・25%中・5%大）。小さい粒はグッと小さく、メリハリを出す。
             let worldR;
             const sizeRand = this._rand();
-            if (sizeRand < 0.7) worldR = 3 + this._rand() * 7;
-            else if (sizeRand < 0.95) worldR = 16 + this._rand() * 18;
-            else worldR = 36 + this._rand() * 28;
+            if (sizeRand < 0.75) worldR = 2 + this._rand() * 5;        // 小（75%）: 2〜7
+            else if (sizeRand < 0.97) worldR = 18 + this._rand() * 22; // 中（22%）: 18〜40
+            else worldR = 45 + this._rand() * 25;                      // 大（3%）:  45〜70
             worldR *= 0.8 + density * 0.8;
             this.baseRadii[i] = worldR;
 
@@ -548,6 +548,7 @@ export class Scene09 extends SceneBase {
             uPushRadius: { value: this.cloudRadius * 0.5 },
             uPushAmount: { value: this.cloudRadius * 0.45 },
             uNoiseAmp: { value: this.membraneRadius * 0.12 },
+            uAlpha: { value: 0.0 },
         };
         this._membraneUniforms = uniforms;
 
@@ -601,6 +602,7 @@ export class Scene09 extends SceneBase {
         `;
 
         const fragmentShader = /* glsl */`
+            uniform float uAlpha;
             varying float vHeat;
 
             // 青→シアン→緑→黄→赤 のヒートマップ
@@ -622,7 +624,7 @@ export class Scene09 extends SceneBase {
 
             void main() {
                 vec3 col = heatmap(vHeat);
-                float alpha = 0.55 + vHeat * 0.35; // 膨張部分はより不透明に
+                float alpha = (0.55 + vHeat * 0.35) * uAlpha;
                 gl_FragColor = vec4(col, alpha);
             }
         `;
@@ -642,6 +644,7 @@ export class Scene09 extends SceneBase {
         this.membrane = new THREE.Mesh(geo, mat);
         this.membrane.position.set(0, this.cloudCenterY, 0);
         this.membrane.frustumCulled = false;
+        this.membrane.visible = true;  // uAlpha=0 から始まるのでvisible=trueで問題なし
         this.scene.add(this.membrane);
 
         // ---- 膜の頂点に置く「赤く光る節点」（細胞の核っぽいアクセント）----
@@ -778,6 +781,12 @@ export class Scene09 extends SceneBase {
             this.orbitalCurrentIdx = idx;
             this._resampleTargets(this.orbitals[idx]);
             this._randomizePhaseParams();
+        }
+        // ワイヤーフレーム膜：phase4以降でじわりフェードイン
+        if (this.membrane && this._membraneUniforms) {
+            const alphaTarget = ph >= 4 ? 1.0 : 0.0;
+            const u = this._membraneUniforms.uAlpha;
+            u.value += (alphaTarget - u.value) * 0.008;
         }
     }
 

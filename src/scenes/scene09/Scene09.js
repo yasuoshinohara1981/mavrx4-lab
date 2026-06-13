@@ -89,7 +89,7 @@ export class Scene09 extends SceneBase {
         this.trackEffects = {
             1: true,
             2: true,   // 色反転（委譲）
-            3: true,   // 赤シリンダースポーン（Scene09独自処理）
+            3: false,  // 色収差（委譲）
             4: false,  // グリッチ（委譲）
             5: true,
             6: true,
@@ -174,18 +174,6 @@ export class Scene09 extends SceneBase {
         this.pinDrift = 0.2;        // 常時かかる微弱なランダム力（track6無しでも漂う）
         this.pinKickMin = 120;      // track6 の最小キック速度
         this.pinKickMax = 480;      // track6 の最大キック速度
-
-        // ===== track3：赤いシリンダー群 =====
-        this.maxCylinders = 320;
-        this.cylinderLifetimeMs = 4000;
-        this.cylinderFadeOutMs = 800;
-        this.cylinderGrowInMs = 180;
-        this._cylInstMesh = null;
-        this._cylMat = null;
-        this._cylList = [];              // { slotIndex, spawnTime, lifeMs }
-        this._cylFreeSlots = [];
-        this._cylDummy = new THREE.Object3D();
-        this._cylColor = new THREE.Color();
 
         // スクラッチ
         this._tmpV = new THREE.Vector3();
@@ -518,8 +506,8 @@ export class Scene09 extends SceneBase {
             this.particles.push(particle);
 
             // 色：明るいグレー〜チャコールの間でランダマイズ（白基準 color に乗算）。
-            // 明度 0.28(チャコール)〜0.68(明るいグレー) のレンジ。
-            const v = 0.28 + this._rand() * 0.40;
+            // 明度 0.12(濃いチャコール)〜0.45(中グレー) のレンジ。
+            const v = 0.12 + this._rand() * 0.33;
             this._colorTmp.setRGB(v, v, v);
             // ほんのり色相のブレ（青寄り↔赤寄り）を足してメカ感を残す
             this._colorTmp.offsetHSL((this._rand() - 0.5) * 0.03, (this._rand() - 0.5) * 0.05, 0);
@@ -703,112 +691,6 @@ export class Scene09 extends SceneBase {
         this._nodeDummy = new THREE.Object3D();
     }
 
-    // ===== track3：赤いシリンダー =====
-
-    _buildCylinders() {
-        const geo = new THREE.CylinderGeometry(1, 1, 1, 12, 1);
-        const env = this.scene?.environment || null;
-        this._cylMat = new THREE.MeshPhysicalMaterial({
-            color: 0xcc2010,
-            metalness: 0.55,
-            roughness: 0.18,
-            clearcoat: 0.9,
-            clearcoatRoughness: 0.08,
-            envMap: env,
-            envMapIntensity: 1.4,
-            emissive: 0x330004,
-            emissiveIntensity: 0.5,
-            fog: true
-        });
-        this._cylInstMesh = new THREE.InstancedMesh(geo, this._cylMat, this.maxCylinders);
-        this._cylInstMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        this._cylInstMesh.count = 0;
-        this._cylInstMesh.frustumCulled = false;
-        this.scene.add(this._cylInstMesh);
-        for (let i = this.maxCylinders - 1; i >= 0; i--) this._cylFreeSlots.push(i);
-    }
-
-    _noisePos(seed) {
-        const s = (n) => { const v = Math.sin(n) * 43758.5453; return v - Math.floor(v); };
-        return s(seed * 12.9898 + 78.233);
-    }
-
-    _spawnCylinders(count, lifeMs) {
-        if (!this._cylInstMesh) return;
-        const R = this.cloudRadius * 2.2;
-        const cy = this.cloudCenterY;
-        const now = performance.now();
-        for (let k = 0; k < count; k++) {
-            if (this._cylList.length >= this.maxCylinders) break;
-            const slot = this._cylFreeSlots.length > 0
-                ? this._cylFreeSlots.pop()
-                : (() => { const old = this._cylList.shift(); return old.slotIndex; })();
-
-            // ノイズ空間に配置：各シリンダーごとに異なるseedで位置を決める
-            const seed = slot * 137.508 + now * 0.00001;
-            const nx = this._noisePos(seed)       * 2 - 1;
-            const ny = this._noisePos(seed + 1.1) * 2 - 1;
-            const nz = this._noisePos(seed + 2.3) * 2 - 1;
-            const len = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
-            // 雲の中心から R 以内のランダム球面上に配置
-            const r = R * (0.3 + this._noisePos(seed + 3.7) * 0.7);
-            const px = (nx / len) * r;
-            const py = cy + (ny / len) * r;
-            const pz = (nz / len) * r;
-
-            // 向き：ノイズ由来のランダム方向
-            const ax = this._noisePos(seed + 5.1) * 2 - 1;
-            const ay = this._noisePos(seed + 6.3) * 2 - 1;
-            const az = this._noisePos(seed + 7.7) * 2 - 1;
-
-            // 長さ・太さ
-            const length = 60 + this._noisePos(seed + 8.9) * 140;
-            const radius = 6  + this._noisePos(seed + 9.2) * 14;
-
-            this._cylDummy.position.set(px, py, pz);
-            this._cylDummy.scale.set(radius, length, radius);
-            this._cylDummy.quaternion.setFromUnitVectors(
-                new THREE.Vector3(0, 1, 0),
-                new THREE.Vector3(ax, ay, az).normalize()
-            );
-            this._cylDummy.updateMatrix();
-            this._cylInstMesh.setMatrixAt(slot, this._cylDummy.matrix);
-
-            // 色：赤系で微妙なばらつき
-            this._cylColor.setHex(0xcc2010);
-            this._cylColor.offsetHSL(0, (this._noisePos(seed + 10.1) - 0.5) * 0.06, (this._noisePos(seed + 11.3) - 0.5) * 0.12);
-            this._cylInstMesh.setColorAt(slot, this._cylColor);
-
-            this._cylList.push({ slotIndex: slot, spawnTime: now, lifeMs });
-        }
-        this._cylInstMesh.instanceMatrix.needsUpdate = true;
-        if (this._cylInstMesh.instanceColor) this._cylInstMesh.instanceColor.needsUpdate = true;
-        this._cylInstMesh.count = Math.max(this._cylInstMesh.count, ...this._cylList.map(c => c.slotIndex + 1));
-    }
-
-    _updateCylinders() {
-        if (!this._cylInstMesh || this._cylList.length === 0) return;
-        const now = performance.now();
-        const fadeOut = this.cylinderFadeOutMs;
-        const growIn  = this.cylinderGrowInMs;
-        const dead = [];
-        for (let i = this._cylList.length - 1; i >= 0; i--) {
-            const c = this._cylList[i];
-            const elapsed = now - c.spawnTime;
-            if (elapsed >= c.lifeMs) {
-                dead.push(i);
-                // スケールゼロで非表示
-                this._cylDummy.position.set(0, -99999, 0);
-                this._cylDummy.scale.setScalar(0);
-                this._cylDummy.updateMatrix();
-                this._cylInstMesh.setMatrixAt(c.slotIndex, this._cylDummy.matrix);
-                this._cylFreeSlots.push(c.slotIndex);
-            }
-        }
-        for (const i of dead) this._cylList.splice(i, 1);
-        if (dead.length > 0) this._cylInstMesh.instanceMatrix.needsUpdate = true;
-    }
-
     /** 頂点シェーダーと同じ hash/noise（節点を膜変形に追従させるため CPU で再現）。 */
     _membraneHash(x, y, z) {
         const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453;
@@ -892,10 +774,55 @@ export class Scene09 extends SceneBase {
         const ph = Math.floor(this.phase || 0);
         if (ph !== this._lastPhase) {
             this._lastPhase = ph;
-            // phase 値 → 軌道タイプ（9区切りを4種の軌道に巡回割り当て）
             const idx = ph % this.orbitals.length;
             this.orbitalCurrentIdx = idx;
             this._resampleTargets(this.orbitals[idx]);
+            this._randomizePhaseParams();
+        }
+    }
+
+    /**
+     * phase切り替わりのたびに各種パラメータをランダム化して予測不可能性を生む。
+     * ランダム化対象：
+     *   - エフェクトON/OFF（Bloom / SSAO / DOF / FilmGrain / ヒートマップ膜スキン）
+     *   - パーティクルサイズ（baseRadiiスケール）
+     *   - ピンボール力（pinDrift / pinFriction / pinRestitution）
+     *   - うねり振幅（warpBase）
+     *   - 膜のpush量・ノイズ振幅
+     *   - Bloom強度・半径
+     */
+    _randomizePhaseParams() {
+        const r = () => Math.random();
+
+        // ---- エフェクトON/OFF ----
+
+
+        // ---- パーティクルサイズ全体スケール ----
+        if (this.baseRadii) {
+            // 0.55〜1.6 倍でリスケール（大きい時は目立つ、小さい時は繊細）
+            const sizeScale = 0.55 + r() * 1.05;
+            if (!this._baseRadiiOriginal) {
+                // 初回だけ元のサイズを保存
+                this._baseRadiiOriginal = new Float32Array(this.baseRadii);
+            }
+            for (let i = 0; i < this.baseRadii.length; i++) {
+                this.baseRadii[i] = this._baseRadiiOriginal[i] * sizeScale;
+            }
+        }
+
+        // ---- ピンボール力 ----
+        this.pinDrift       = r() * 2.5;              // 0〜2.5（大半は静か、たまに活発）
+        this.pinFriction    = 0.15 + r() * 0.75;      // 0.15〜0.9
+        this.pinRestitution = 0.2  + r() * 0.65;      // 0.2〜0.85
+
+        // ---- うねり振幅ベース ----
+        this._warpBase = 8 + r() * 80;                // 8〜88（_updateCloud で mood と合成）
+
+        // ---- 膜パラメータ ----
+        if (this._membraneUniforms) {
+            this._membraneUniforms.uNoiseAmp.value  = this.membraneRadius * (0.04 + r() * 0.18);
+            this._membraneUniforms.uPushAmount.value = this.cloudRadius   * (0.25 + r() * 0.45);
+            this._membraneUniforms.uPushRadius.value = this.cloudRadius   * (0.3  + r() * 0.4);
         }
     }
 
@@ -964,7 +891,7 @@ export class Scene09 extends SceneBase {
         const expand = 1.0 + mood * 0.25 + this.excitation * 0.6 + this.pulse * 0.25;
         // うねり強度：phase 進行に応じたゆったりした基底のみ。
         // track7(excitation)/track1(warpLevel) でうねりを爆発させない（中心から弾けるのを止める）。
-        const warpAmp = 22 + mood * 55;
+        const warpAmp = (this._warpBase ?? 22) + mood * 55;
 
         // 目標位置へ寄せる補間係数（モーフ遷移時はゆっくり）
         const lerpK = tp ? Math.min(1, dt * 1.5) : 0;
@@ -1204,7 +1131,6 @@ export class Scene09 extends SceneBase {
 
         this.createCloud();
         this._buildMembrane();
-        this._buildCylinders();
 
         this.setupCameraParticleDistances();
         this.initPostProcessing();
@@ -1224,7 +1150,6 @@ export class Scene09 extends SceneBase {
         this._updateOrbitalMorph();
         this._updateCloud(deltaTime);
         this._updateMembrane(deltaTime);
-        this._updateCylinders();
 
         this.atmosphere?.update(deltaTime, this.time, this._centerSmoothed);
 
@@ -1347,16 +1272,7 @@ export class Scene09 extends SceneBase {
             return;
         }
 
-        // track3：赤シリンダースポーン
-        if (tn === 3) {
-            const v = Math.max(0, Math.min(127, velocity)) / 127;
-            const lifeMs = durationMs > 0 ? durationMs : this.cylinderLifetimeMs;
-            const count = 3 + Math.floor(v * 9);  // velocity低=3本、高=12本
-            this._spawnCylinders(count, lifeMs);
-            return;
-        }
-
-        // track2/4 のエフェクト、/phase、/tick、/kit などは親に委譲
+        // track2/3/4 のエフェクト、/phase、/tick、/kit などは親に委譲
         super.handleOSC(message);
     }
 
@@ -1371,9 +1287,9 @@ export class Scene09 extends SceneBase {
             dofFocus: 3800,
             dofAperture: 0.0000012,
             dofMaxBlur: 0.0026,
-            bloomStrength: 0.22,
-            bloomRadius: 0.45,
-            bloomThreshold: 0.65,
+            bloomStrength: 0.10,
+            bloomRadius: 0.32,
+            bloomThreshold: 0.82,
             // SSAO は弱め（粒の黒ハロ＝アニメ風縁取りを抑える）
             ssaoKernelRadius: this.ssaoNearKernelRadius,
             ssaoMinDistance: this.ssaoNearMinDistance,

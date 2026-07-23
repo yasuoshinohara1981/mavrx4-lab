@@ -2257,10 +2257,10 @@ export class Scene12 extends SceneBase {
             dofFocus: 2100,
             dofAperture: 0.0000008,    // 0.0000012 → 0.0000008（ピント面を広げてボケ始めを遠ざける）
             dofMaxBlur: 0.0016,        // 0.0028 → 0.0016（ボケ最大半径を縮めて全体シャープに）
-            // bloomはほぼ切る（滲みを最小限に）
-            bloomStrength: 0.05,       // 0.16 → 0.05（ほぼ消す）
-            bloomRadius: 0.6,          // 0.7 → 0.6
-            bloomThreshold: 0.75       // 0.6 → 0.75（かなり明るい所だけ僅かに滲む）
+            // bloomは「ごく少しだけ」出す（明るい所がほんのり滲む程度）
+            bloomStrength: 0.11,       // 0.18 → 0.11（さらに弱める）
+            bloomRadius: 0.65,         // 滲みを少し柔らかく
+            bloomThreshold: 0.72       // 0.68 → 0.72（拾う範囲を少し狭めて控えめに）
         });
         if (this.filmPass?.uniforms?.uColorNoise) {
             this.filmPass.uniforms.uColorNoise.value = 0.03;  // 0.1 → 0.03（色ノイズによる濁り除去）

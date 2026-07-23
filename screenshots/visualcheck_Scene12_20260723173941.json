@@ -1,0 +1,26 @@
+{
+  "scene": {
+    "index": 11,
+    "no": 12,
+    "label": "Scene12"
+  },
+  "url": "http://localhost:3000",
+  "viewport": "1920x1080",
+  "headless": false,
+  "shots": 2,
+  "gapSec": 2,
+  "warmupSec": 2.5,
+  "stamp": "20260723173941",
+  "shotDir": "/Users/shinoharayasuo/Documents/threejs-live/src/mavrx4-lab/screenshots",
+  "simulate": true,
+  "simSent": 13,
+  "simRate": 7,
+  "simTracks": 10,
+  "fps": {
+    "error": "page.evaluate: Target page, context or browser has been closed"
+  },
+  "captures": [],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

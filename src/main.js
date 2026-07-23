@@ -16,9 +16,9 @@ import { attachCanvasDragOrbit } from './lib/CanvasDragOrbit.js';
 // 開発モード/ライブモードの設定
 // true: 開発モード（デフォルトシーンのみ読み込み）
 // false: ライブモード（全てのシーンをプリロード）
-const IS_DEVELOPMENT_MODE = false;  // 開発時は true に変更
+const IS_DEVELOPMENT_MODE = true;
 
-// デフォルトシーンのインデックス（0 = Scene01, … 8 = Scene09, … 11 = Scene12）
+// デフォルトシーンのインデックス（0 = Scene01, … 11 = Scene12, 12 = Scene13）
 const DEFAULT_SCENE_INDEX = 11;
 
 // ============================================
@@ -65,8 +65,8 @@ let frameCount = 0;
 // キー入力管理
 let ctrlPressed = false;
 
-// マウスカーソル表示（デフォルト表示、c/C で表示/非表示を切り替え）
-let appCursorVisible = true;
+// マウスカーソル表示（デフォルト非表示、c/C で表示/非表示を切り替え）
+let appCursorVisible = false;
 
 function applyAppCursorVisibility() {
     const style = appCursorVisible ? '' : 'none';
@@ -92,7 +92,7 @@ function initRenderer() {
     renderer.setClearColor(0x000000);
     /** シーンの setup より前からシャドウを有効化（全シーン共通） */
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     document.body.appendChild(renderer.domElement);
     applyAppCursorVisibility();
 }

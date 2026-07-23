@@ -1,0 +1,49 @@
+{
+  "scene": {
+    "index": 11,
+    "no": 12,
+    "label": "Scene12"
+  },
+  "url": "http://localhost:3000",
+  "viewport": "1920x1080",
+  "headless": false,
+  "shots": 4,
+  "gapSec": 2.5,
+  "warmupSec": 2.5,
+  "stamp": "20260707000211",
+  "shotDir": "/Users/shinoharayasuo/Documents/threejs-live/src/mavrx4-lab/screenshots",
+  "fps": {
+    "frames": 668,
+    "seconds": 11.13,
+    "avgFps": 60,
+    "medianMs": 16.7,
+    "p95Ms": 16.8,
+    "worstMs": 17.7,
+    "minFps": 56.5
+  },
+  "captures": [
+    {
+      "i": 1,
+      "file": "visualcheck_Scene12_20260707000211_01.png",
+      "fpsAtShot": 60
+    },
+    {
+      "i": 2,
+      "file": "visualcheck_Scene12_20260707000211_02.png",
+      "fpsAtShot": 60
+    },
+    {
+      "i": 3,
+      "file": "visualcheck_Scene12_20260707000211_03.png",
+      "fpsAtShot": 60
+    },
+    {
+      "i": 4,
+      "file": "visualcheck_Scene12_20260707000211_04.png",
+      "fpsAtShot": 60
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

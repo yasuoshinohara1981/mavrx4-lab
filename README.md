@@ -4,7 +4,7 @@
 
 StudioBox・コンクリート空間・Xeno 系ビジュアルなど、**ラボ／実験室テーマ**のシーンを OSC 連動でライブ演奏する Three.js プロジェクト。
 
-## シーン構成（Scene01〜12）
+## シーン構成（Scene01〜13）
 
 | # | タイトル | 由来 |
 |---|----------|----------|
@@ -20,8 +20,9 @@ StudioBox・コンクリート空間・Xeno 系ビジュアルなど、**ラボ�
 | Scene10 | mathym \| Xenobirth | 旧 lab Scene2（Emerald Swarm） |
 | Scene11 | mathym \| Xenoxa | 旧 lab Scene3 |
 | Scene12 | mathym \| Xenodub | 旧 lab Scene4 |
+| Scene13 | mathym \| Neon Tokyo | 新規（サイバーパンク東京・雨・ネオン街） |
 
-**Ctrl + 1〜9, 0** でバンク内切替（`[` / `]` でバンク切替）。バンク0 = Scene01〜10、バンク1 = Scene11〜12。
+**Ctrl + 1〜9, 0** でバンク内切替（`[` / `]` でバンク切替）。バンク0 = Scene01〜10、バンク1 = Scene11〜13。
 
 ## クイックスタート
 

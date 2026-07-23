@@ -134,10 +134,14 @@ export function ceilingSpotRigOptionsForStudioRoom(sceneLightingScale) {
         envMapIntensity: 0,
         shadowDebugSpot: {
             enabled: true,
-            // Sharper and more stable contact shadows for large room scale.
-            shadowMapSize: 4096,
-            shadowBias: -0.0002,
-            shadowNormalBias: 0.028,
+            // PCFシャドウ: 範囲外を黒く落とさないのでVSMのような黒落ちが起きない。
+            // 低解像度(1536)＋radiusでソフトにして「ボワン影」に寄せる。マップは元の4096比で約1/7。
+            shadowMapSize: 1536,
+            // PCF標準の負の小さいbias（自己遮蔽アクネ防止）
+            shadowBias: -0.0004,
+            shadowNormalBias: 0.03,
+            // PCFのradius: テクセル単位でエッジをソフト化（大きめでボワン、黒落ちの副作用なし）
+            shadowRadius: 5,
             cameraNear: 800,
             cameraFar: 9000,
             // キー光を強め＋ペナンブラを絞り、シャドウをはっきり見せる（フィルは studioBox 側で抑制）

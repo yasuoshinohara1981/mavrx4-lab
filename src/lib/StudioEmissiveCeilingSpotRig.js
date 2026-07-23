@@ -115,6 +115,9 @@ export class StudioEmissiveCeilingSpotRig {
                 sh.mapSize.set(cfg.shadowMapSize, cfg.shadowMapSize);
                 sh.bias = cfg.shadowBias;
                 sh.normalBias = cfg.shadowNormalBias;
+                // VSMシャドウ用のぼかし（低解像度でもギザギザを溶かして「ボワン影」にする）
+                if (cfg.shadowRadius !== undefined) sh.radius = cfg.shadowRadius;
+                if (cfg.shadowBlurSamples !== undefined) sh.blurSamples = cfg.shadowBlurSamples;
                 const cam = sh.camera;
                 cam.near = cfg.cameraNear;
                 cam.far = cfg.cameraFar;

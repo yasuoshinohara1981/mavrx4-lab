@@ -306,7 +306,7 @@ export class Scene07 extends SceneBase {
 
         // シャドウはこのスポットのみが投射。cast/receive はメッシュ単位（未設定は false）
         this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
         this.setupEnvironment();
 

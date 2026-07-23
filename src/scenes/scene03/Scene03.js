@@ -235,7 +235,7 @@ export class Scene03 extends SceneBase {
         this.useSSAO = false;
 
         this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.shadowMap.type = THREE.PCFShadowMap;
         applyStudioRoomToneAndBackdrop(this.renderer, this.scene, this.sceneLightingScale, {
             useSceneFog: this.useSceneFog,
             sceneFogDensity: this.sceneFogDensity,

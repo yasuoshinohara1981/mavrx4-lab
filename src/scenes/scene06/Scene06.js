@@ -125,7 +125,7 @@ export class Scene06 extends SceneBase {
         this.camera.lookAt(0, 200, 0);
 
         this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.shadowMap.type = THREE.PCFShadowMap;
         applyStandardPresentationRenderer(this.renderer, this.sceneLightingScale);
 
         this.createSpheres();

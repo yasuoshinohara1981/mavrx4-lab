@@ -1,0 +1,24 @@
+{
+  "scene": {
+    "index": 11,
+    "no": 12,
+    "label": "Scene12"
+  },
+  "url": "http://localhost:3000",
+  "viewport": "1280x720",
+  "headless": true,
+  "shots": 1,
+  "gapSec": 1,
+  "warmupSec": 4,
+  "stamp": "err174005",
+  "shotDir": "/Users/shinoharayasuo/Documents/threejs-live/src/mavrx4-lab/screenshots",
+  "simulate": false,
+  "simSent": 0,
+  "simRate": 0,
+  "simTracks": 0,
+  "fps": {
+    "error": "page.waitForSelector: Timeout 15000ms exceeded.\nCall log:\n  - waiting for locator('canvas') to be visible\n    - locator resolved to 3 elements. Proceeding with the first one: <canvas width=\"1280\" height=\"720\" data-engine=\"three.js r160\"></canvas>\n"
+  },
+  "captures": [],
+  "consoleErrors": []
+}

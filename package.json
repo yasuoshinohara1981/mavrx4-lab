@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "description": "mavrx4-lab — 実験室シリーズ。Three.js ライブビジュアル（OSC連動）",
-    "scripts": {
+  "scripts": {
     "dev": "vite --port 3000 --strictPort --host",
     "build": "vite build",
     "preview": "vite preview",
@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
+    "playwright": "^1.61.1",
     "vite": "^5.0.0"
   }
 }

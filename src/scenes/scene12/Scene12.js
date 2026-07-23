@@ -36,6 +36,15 @@ import { Scene02Particle } from '../scene02/Scene02Particle.js';
 import { StudioAtmosphere } from '../../lib/StudioAtmosphere.js';
 import { StudioFluorescentLamp } from '../../lib/StudioFluorescentLamp.js';
 import { generateFleshVeinTextures } from '../../lib/FleshVeinTextures.js';
+import {
+    gridWarpVertexHead,
+    gridWarpBeginVertex,
+    gridWarpBeginNormal,
+    gridWarpProjectVertex,
+    GRID_WARP_MAX_WARP_PULSES,
+    GRID_WARP_MAX_IMP_PULSES,
+    MORPH_SHAPE_ID
+} from './gridWarp.glsl.js';
 
 export class Scene12 extends SceneBase {
     constructor(renderer, camera, sharedResourceManager = null) {
@@ -75,8 +84,8 @@ export class Scene12 extends SceneBase {
         this.trackEffects = {
             1: true,
             2: true,
-            3: false,
-            4: false,
+            3: true,   // デフォルトON: ダイナミックエフェクト（下記 handleOSC track3）
+            4: true,   // デフォルトON: ダイナミックエフェクト（下記 handleOSC track4）
             5: true,
             6: true,
             7: true,
@@ -86,6 +95,10 @@ export class Scene12 extends SceneBase {
         };
         // track2 は色反転エフェクト（ストロボは使わない）
         this.useTrack2Strobe = false;
+        this.track2FlashMs = 60;   // track2色反転の瞬間フラッシュ時間(ms)。duration依存をやめて固定短時間に
+
+        // 3Dコールアウト描画のON/OFF（重い場合は false で止める）
+        this.use3DCallouts = false;
         this.setScreenshotText(this.title);
 
         this.instancedMeshManager = null;
@@ -98,6 +111,12 @@ export class Scene12 extends SceneBase {
         this.roomHalfD = 5000;
         this.floorTopY = -498;
         this.ceilingY = 5500;
+
+        // ===== 真っ暗空間モード（試験用フラグ） =====
+        // true: 天井ライト・壁/床・四隅蛍光灯を描画しない → 背景真っ黒
+        this.blackVoidMode = false;
+        // シャドウ描画（blackVoidModeとは独立。部屋を出しつつ影だけ切れる）
+        this.enableShadows = true;
 
         // StudioBox
         this.useStudioBox = false;
@@ -117,7 +136,7 @@ export class Scene12 extends SceneBase {
         this.collectiveGlowLight = null;
 
         // チリパーティクルパラメータ
-        this.ambientParticleCount = 2000;
+        this.ambientParticleCount = 1000;
         this.ambientParticleLifetimeMs = 11000;
         this.ambientParticleFadeOutMs = 1400;
         this.ambientMinLiving = 180;
@@ -130,13 +149,23 @@ export class Scene12 extends SceneBase {
 
         // ===== うねりグリッド =====
         // 部屋: roomHalfW=5000, ceilingY=5500, floorTopY=-498
-        this.gridFieldW = 4500.0;
-        this.gridFieldH = 3000.0;
+        this.gridFieldW = 7000.0;
+        this.gridFieldH = 4200.0;
         this.gridCenterY = STUDIO_FLOOR_TOP_Y + this.gridFieldH * 0.5 + 500;  // 部屋中央より少し上
         this.gridCenterZ = 0.0;
-        this.gridCols = 100;
-        this.gridRows = 100;
-        this.sphereCount = this.gridCols * this.gridRows;
+        // ライン/波形/マーカー用のグリッド解像度。フィールド比(7000:4200≒1.667)に合わせて横長セル。
+        // キューブと 1:1（ライン交点ごとにキューブ1個）。ライン点数=キューブ点数。
+        // 真っ暗モードで負荷が減ったぶんキューブ数を約2倍(≒1万)に。128 × 78 = 9,984。
+        // ※ライン更新はCPUなのでここを上げるとCPU負荷も増える点に注意。
+        this.gridCols = 128;
+        this.gridRows = 78;
+
+        // ===== キューブ本体の解像度 =====
+        // ライン1マスにキューブ1個（1:1）。キューブ解像度 = ライン解像度で格子点が完全一致する。
+        this.cubeGridMultiple = 1;
+        this.cubeCols = this.gridCols;   // 129
+        this.cubeRows = this.gridRows;   // 77
+        this.sphereCount = this.cubeCols * this.cubeRows;
 
         this.gridBaseX = null;
         this.gridBaseY = null;
@@ -172,7 +201,7 @@ export class Scene12 extends SceneBase {
         this.waveFieldW = this.gridFieldW;
         this.waveCenterY = this.gridCenterY;
         this.trackCount = 12;
-        this.waveSegments = 160;
+        this.waveSegments = 96;   // 160 → 96（毎フレームTube再生成の頂点数を削減）
         this.waveLines = [];
         this.wavePositions = [];
         this.waveTubeRadius = 2.5;
@@ -206,6 +235,18 @@ export class Scene12 extends SceneBase {
         this._cubeBoostDecay = 2.2;
         this._cubeBoostRadius = Math.min(this.gridFieldW, this.gridFieldH) * 0.28;
 
+        // ---- actual_tick連動のグリッド増加 ----
+        this._tickGrowActive = false;   // OSCの/actual_tickを一度でも観測したらtrue
+        this._visibleRows = this.gridRows;
+
+        // ---- track9: ブルーム・ブロッサム（拡大する発光リング + 放射クロス + 中心グロー）----
+        this.useBlossomFloorRing = false;  // false: 床に広がる発光リングを出さない（クロス花火・グローは残す）
+        this._blossomRings = [];        // { mesh, mat, life, maxLife, maxScale } のプール
+        this._blossomRingPool = [];     // 使い回しメッシュ
+        this._blossomRingMax = 6;
+        this._blossomGlowLight = null;  // 一時発光ポイントライト
+        this._blossomGlowLevel = 0.0;   // 0〜1 発光量（減衰）
+
         // ヒートマップ色相ランダムウォーク
         this._heatHue = 0.0;       // 現在の色相オフセット（0〜1）
         this._heatHueVel = 0.0;    // 色相変化速度
@@ -226,6 +267,19 @@ export class Scene12 extends SceneBase {
 
         // _centerSmoothed 初期値はgridCenterY基準
         this._centerSmoothed = new THREE.Vector3(0, this.gridCenterY, 0);
+
+        // ===== パーティクル基準サイズのLFOノイズ =====
+        // actual_tick と phase を使ってゆっくり大きさを変化させる
+        this._particleNoiseScale = 1.0;  // 現在のノイズ係数（1.0=基準）
+
+        // ===== GPU頂点変位（キューブ本体のwarpをシェーダで実行） =====
+        // true: warp計算を頂点シェーダで行う（パーティクル数に対してCPU定数コスト）
+        // false: 旧CPU実装（_updateGridCubesCPU）。見た目比較・フォールバック用。
+        this.useGPUWarp = true;
+        this._gpuWarpUniforms = null;   // メインマテリアルのuniform参照
+        this._gpuWarpUniformsDepth = null; // customDepthMaterialのuniform参照
+        this._boostAttr = null;         // aBoost InstancedBufferAttribute
+        // warp後の中心Z（uGridCenterZ）はJS版と同じ this.gridCenterZ を使う
     }
 
     // ===== Scene12固有: buildRoom / setupLights / createAmbientFloatingParticles =====
@@ -319,7 +373,7 @@ export class Scene12 extends SceneBase {
         const cz = this.roomHalfD - 400;
         const corners = [[cx, lampY, cz], [-cx, lampY, cz], [cx, lampY, -cz], [-cx, lampY, -cz]];
 
-        for (const [x, y, z] of corners) {
+        corners.forEach(([x, y, z], i) => {
             const lamp = new StudioFluorescentLamp(this.scene, {
                 position: { x, y, z },
                 color: 0xfff8e8,
@@ -331,7 +385,7 @@ export class Scene12 extends SceneBase {
                 decay: 1.2
             });
             this._cornerLamps.push(lamp);
-        }
+        });
     }
 
     /** StudioBox PointLight等のビジュアルを隠す */
@@ -449,8 +503,10 @@ export class Scene12 extends SceneBase {
     // ===== Scene09由来: グリッド立方体 =====
 
     createSpheres() {
-        const cols = this.gridCols;
-        const rows = this.gridRows;
+        // GPU warp のときはキューブ専用の高解像度、CPU版のときは従来のグリッド解像度
+        const cols = this.useGPUWarp ? this.cubeCols : this.gridCols;
+        const rows = this.useGPUWarp ? this.cubeRows : this.gridRows;
+        this.sphereCount = cols * rows;
         const n = this.sphereCount;
 
         const geo = new THREE.BoxGeometry(1, 1, 1);
@@ -473,13 +529,34 @@ export class Scene12 extends SceneBase {
         });
         if (this.scene?.environment) mat.envMap = this.scene.environment;
 
+        // GPU warp を使う場合、頂点シェーダに warp/scale を注入する
+        if (this.useGPUWarp) {
+            this._installGPUWarpMaterial(mat, geo);
+        }
+
         this.instancedMeshManager = new InstancedMeshManager(this.scene, geo, mat, n);
         const mainMesh = this.instancedMeshManager.getMainMesh();
-        mainMesh.castShadow = true;
-        mainMesh.receiveShadow = true;
+        mainMesh.castShadow = this.enableShadows;
+        mainMesh.receiveShadow = this.enableShadows;
+        if (this.useGPUWarp && this._gpuDepthMaterial) {
+            mainMesh.customDepthMaterial = this._gpuDepthMaterial;
+        }
 
         this.gridBaseX = new Float32Array(n);
         this.gridBaseY = new Float32Array(n);
+
+        // GPU warp 用の per-instance 属性
+        // aBaseXY: グリッド基準座標 / aBoost: track8スケールブースト（0で初期化）
+        const baseXY = new Float32Array(n * 2);
+        const boostArr = new Float32Array(n); // 0 で初期化
+        // 頂点に「基準スケール」を内包させるため、インスタンスごとの半径も保持する。
+        // GPU版では position*gwScale で描くので、各キューブの基準半径を頂点側に持たせる必要がある
+        // → 均一半径のBoxGeometryを共有しつつ、半径差はインスタンス属性 aRadius で表現する。
+        const radiusArr = new Float32Array(n);
+        // 回転を完全GPU化: 初期回転角(aRotSeed) と 基礎角速度(aAngVel) と 連番(aIndexF)
+        const rotSeedArr = new Float32Array(n * 3);
+        const angVelArr = new Float32Array(n * 3);
+        const indexArr = new Float32Array(n);
 
         const hw = this.gridFieldW * 0.5;
         const hh = this.gridFieldH * 0.5;
@@ -501,12 +578,31 @@ export class Scene12 extends SceneBase {
                 const scale = new THREE.Vector3(worldR, worldR, worldR);
                 const radius = Math.max(scale.x, scale.y, scale.z) * 0.5;
                 const p = new Scene02Particle(bx, by, this.gridCenterZ, radius, scale);
-                p.angularVelocity.multiplyScalar(8.0);
+                p.angularVelocity.multiplyScalar(1.1);   // 2.5→1.1 キューブ回転をさらに落ち着かせる
                 this.particles.push(p);
+
+                baseXY[i * 2] = bx;
+                baseXY[i * 2 + 1] = by;
+                radiusArr[i] = worldR;
+
+                // 回転: 初期角と角速度を属性へ（GPU側で time*角速度 として積分する）
+                rotSeedArr[i * 3] = p.rotation.x;
+                rotSeedArr[i * 3 + 1] = p.rotation.y;
+                rotSeedArr[i * 3 + 2] = p.rotation.z;
+                angVelArr[i * 3] = p.angularVelocity.x;
+                angVelArr[i * 3 + 1] = p.angularVelocity.y;
+                angVelArr[i * 3 + 2] = p.angularVelocity.z;
+                indexArr[i] = i;
 
                 this._setRandomRockCharcoalColor(this._colorTmp);
                 this.instancedMeshManager.setColorAt(i, this._colorTmp);
-                this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, p.scale);
+
+                if (this.useGPUWarp) {
+                    // GPU版: instanceMatrix は恒等（位置/回転/スケール全部シェーダ）
+                    this.instancedMeshManager.setMatrixAt(i, this._zeroPos, this._identityEuler, this._unitScale);
+                } else {
+                    this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, p.scale);
+                }
                 i++;
             }
         }
@@ -516,6 +612,103 @@ export class Scene12 extends SceneBase {
 
         this._cubeBoostMap = new Float32Array(n);
         this._gridPulseCache = new Float32Array(n);
+
+        if (this.useGPUWarp) {
+            geo.setAttribute('aBaseXY', new THREE.InstancedBufferAttribute(baseXY, 2));
+            this._boostAttr = new THREE.InstancedBufferAttribute(boostArr, 1);
+            this._boostAttr.setUsage(THREE.DynamicDrawUsage);
+            geo.setAttribute('aBoost', this._boostAttr);
+            // aRadius: 各インスタンスの基準半径（頂点スケールに乗る）
+            geo.setAttribute('aRadius', new THREE.InstancedBufferAttribute(radiusArr, 1));
+            // 回転（完全GPU化）
+            geo.setAttribute('aRotSeed', new THREE.InstancedBufferAttribute(rotSeedArr, 3));
+            geo.setAttribute('aAngVel', new THREE.InstancedBufferAttribute(angVelArr, 3));
+            geo.setAttribute('aIndexF', new THREE.InstancedBufferAttribute(indexArr, 1));
+        }
+    }
+
+    /**
+     * メインマテリアル(mat)と影用depthMaterialに GPU warp を注入する。
+     * uniform 参照を保持し、毎フレーム _syncWarpUniforms で更新する。
+     */
+    _installGPUWarpMaterial(mat, geo) {
+        // シェーダ再利用のためのキャッシュキー（GPU warp 版として一意に）
+        mat.customProgramCacheKey = () => 'scene12-gpu-warp';
+
+        const makeUniforms = () => ({
+            uWarpAmp: { value: 0 },
+            uTime: { value: 0 },
+            uBreath: { value: this.idleBreathAmp },
+            uGridCenterY: { value: this.gridCenterY },
+            uGridCenterZ: { value: this.gridCenterZ },
+            uGridFieldW: { value: this.gridFieldW },
+            uGridFieldH: { value: this.gridFieldH },
+            uMorphRadius: { value: this.morphRadius },
+            uMorphShapeA: { value: 0 },
+            uMorphShapeB: { value: 1 },
+            uMorphT: { value: 0 },
+            uNoiseScale: { value: 1.0 },
+            uWarpCount: { value: 0 },
+            uWarpPulses: { value: Array.from({ length: GRID_WARP_MAX_WARP_PULSES }, () => new THREE.Vector4()) },
+            uWarpEnv: { value: new Float32Array(GRID_WARP_MAX_WARP_PULSES) },
+            uImpCount: { value: 0 },
+            uImpPulses: { value: Array.from({ length: GRID_WARP_MAX_IMP_PULSES }, () => new THREE.Vector4()) },
+            uImpEnv: { value: new Float32Array(GRID_WARP_MAX_IMP_PULSES) },
+        });
+
+        // hasNormal=true: メインマテリアル（beginnormal_vertex で gwRotMat 生成＋法線回転）
+        // hasNormal=false: depthマテリアル（法線chunk無し → begin_vertex 内で gwRotMat 生成）
+        const injectVertex = (shader, uniforms, hasNormal) => {
+            for (const k in uniforms) shader.uniforms[k] = uniforms[k];
+            shader.vertexShader =
+                'attribute float aRadius;\n' +
+                gridWarpVertexHead + '\n' +
+                shader.vertexShader;
+
+            if (hasNormal) {
+                // 法線chunkで gwRotMat 生成＋法線回転
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <beginnormal_vertex>',
+                    gridWarpBeginNormal
+                );
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <begin_vertex>',
+                    gridWarpBeginVertex
+                );
+            } else {
+                // depth: gwRotMat を begin_vertex 内で生成してから使う
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <begin_vertex>',
+                    'mat3 gwRotMat = gwRotationMatrix(aBaseXY.x, aBaseXY.y);\n' + gridWarpBeginVertex
+                );
+            }
+            shader.vertexShader = shader.vertexShader.replace(
+                '#include <project_vertex>',
+                gridWarpProjectVertex
+            );
+        };
+
+        const mainUniforms = makeUniforms();
+        mat.onBeforeCompile = (shader) => {
+            injectVertex(shader, mainUniforms, true);
+            mat.userData.shader = shader;
+        };
+        this._gpuWarpUniforms = mainUniforms;
+
+        // 影用 depth material にも同じ warp を注入（影が本体とズレないように）
+        const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+        const depthUniforms = makeUniforms();
+        depthMaterial.onBeforeCompile = (shader) => {
+            injectVertex(shader, depthUniforms, false);
+            depthMaterial.userData.shader = shader;
+        };
+        this._gpuWarpUniformsDepth = depthUniforms;
+        this._gpuDepthMaterial = depthMaterial;
+
+        // これらは createSpheres のループで参照する恒等トランスフォーム
+        this._zeroPos = new THREE.Vector3(0, 0, 0);
+        this._identityEuler = new THREE.Euler(0, 0, 0);
+        this._unitScale = new THREE.Vector3(1, 1, 1);
     }
 
     createGridLines() {
@@ -563,23 +756,58 @@ export class Scene12 extends SceneBase {
         if (!this._gridLineMesh || !this._gridLineSegs) return;
         const t = this.time;
         const amp = this._warpAmp();
-        const tmp0 = { x: 0, y: 0, z: 0 };
-        const tmp1 = { x: 0, y: 0, z: 0 };
-        const heatMax = this.pulseAmpMax * 2.0;
+        const heatMax = this.pulseAmpMax * 1.0;  // 2.0→1.0（正規化の分母を下げて赤に届きやすく）
         const col = this._gridLineCol;
         const pc = this._gridPulseCache;
         const geo = this._gridLineMesh.geometry;
         const pos = geo.attributes.position.array;
         const clr = geo.attributes.color.array;
 
+        // === 最適化: 全格子点の warp を「1点1回だけ」計算してキャッシュ ===
+        // 旧実装はセグメント両端ごとに warp（=格子点を平均2回ずつ計算、morph三角関数が主犯）。
+        // さらに morph オフセットも格子点ごと事前計算し、warp をインライン展開して関数呼び出しと
+        // morph 重複計算を排除する（_gridWarp 経由だと _getMorphOffset が毎回走るため）。
+        const cols = this.gridCols;
+        const rows = this.gridRows;
+        const nPts = cols * rows;
+        let cache = this._gridPointCache;
+        if (!cache || cache.length !== nPts * 3) {
+            cache = this._gridPointCache = new Float32Array(nPts * 3);
+        }
+        const hw = this.gridFieldW * 0.5;
+        const hh = this.gridFieldH * 0.5;
+        const breath = this.idleBreathAmp;
+        const gcy = this.gridCenterY;
+        const gcz = this.gridCenterZ;
+        const mo = this._morphScratch || (this._morphScratch = { x: 0, y: 0, z: 0 });
+        let k = 0;
+        for (let r = 0; r < rows; r++) {
+            const by = gcy - hh + (this.gridFieldH * r) / (rows - 1);
+            for (let c = 0; c < cols; c++) {
+                const bx = -hw + (this.gridFieldW * c) / (cols - 1);
+                // morph（形状オフセット）— _getMorphOffset を1回だけ
+                const m = this._getMorphOffset(bx, by);
+                // idle 呼吸（時間依存）
+                const ox = bx + m.dx + Math.sin(bx * 0.0009 + by * 0.0007 + t * 0.5) * breath;
+                const oy = by + m.dy + Math.cos(by * 0.0009 - bx * 0.0007 + t * 0.6) * breath;
+                const idleZ = Math.sin(bx * 0.0011 - by * 0.0009 + t * 0.7) * breath;
+                let oz = gcz + idleZ + this._pulseZ(bx, by) + m.dz;
+                // implode（out を破壊更新するので scratch に組んで反映）
+                mo.x = ox; mo.y = oy; mo.z = oz;
+                this._implodeXYZ(bx, by, mo);
+                cache[k] = mo.x; cache[k + 1] = mo.y; cache[k + 2] = mo.z;
+                k += 3;
+            }
+        }
+
+        // セグメントはキャッシュをインデックス参照するだけ（warp 計算なし）
         for (let i = 0; i < this._gridLineSegs.length; i++) {
             const seg = this._gridLineSegs[i];
-            this._gridWarp(seg.ax, seg.ay, amp, t, tmp0);
-            this._gridWarp(seg.bx, seg.by, amp, t, tmp1);
-
+            const ca = seg.ai * 3, cb = seg.bi * 3;
             const base = i * 6;
-            pos[base + 0] = tmp0.x; pos[base + 1] = tmp0.y; pos[base + 2] = tmp0.z;
-            pos[base + 3] = tmp1.x; pos[base + 4] = tmp1.y; pos[base + 5] = tmp1.z;
+
+            pos[base + 0] = cache[ca];     pos[base + 1] = cache[ca + 1]; pos[base + 2] = cache[ca + 2];
+            pos[base + 3] = cache[cb];     pos[base + 4] = cache[cb + 1]; pos[base + 5] = cache[cb + 2];
 
             const dispZ = pc ? (pc[seg.ai] + pc[seg.bi]) * 0.5 : 0;
             this._heatmapColor(dispZ / heatMax, col);
@@ -758,21 +986,132 @@ export class Scene12 extends SceneBase {
         return out;
     }
 
-    // Z変位量(0〜1)をヒートマップ色に変換（色相がランダムウォークでゆっくり変化）
+    // Z変位量(0〜1)を固定ヒートマップ色に変換（力なし=青 → 力が加わると赤へ）
     _heatmapColor(t, out) {
-        const v = Math.max(0, Math.min(1, t));
-        // ベースの色相（青=0.67〜赤=0.0のレンジ）に全体オフセットを乗せる
-        const baseHue = (1.0 - v) * 0.67;
-        const hue = (baseHue + this._heatHue) % 1.0;
-        const l = 0.25 + v * 0.4;
-        const s = 0.7 + v * 0.3;
+        let v = Math.max(0, Math.min(1, t));
+        // 低い力を強く効かせる（ゲイン＋ガンマ）。少しの変位でも一気に暖色へ跳ねる
+        v = Math.min(1, v * 2.6);          // ゲイン: 弱い力を底上げ
+        v = Math.pow(v, 0.55);             // ガンマ<1: 低域をさらに持ち上げてマッピングをキツく
+        // 青(0.60) → シアン → 緑 → 黄 → 赤(0.0)。_heatHue は使わない（七色回転を止める）
+        const hue = (1.0 - v) * 0.60;
+        const l = 0.22 + v * 0.45;
+        const s = 0.75 + v * 0.25;
         this._gridLineColorTmp.setHSL(hue, s, l);
         out.r = this._gridLineColorTmp.r;
         out.g = this._gridLineColorTmp.g;
         out.b = this._gridLineColorTmp.b;
     }
 
+    /**
+     * actual_tick と phase を使ったゆっくりしたノイズ係数を更新する。
+     * 基準サイズを 0.6〜1.4 の範囲でゆらす。
+     */
+    _updateParticleNoiseScale() {
+        // actual_tick を正規化（96小節ループ = 384*96 ticks）
+        const loopTicks = 384 * 96;
+        const tickNorm = ((this.actualTick || 0) % loopTicks) / loopTicks;
+        // phase は 0〜1
+        const ph = this.phase || 0;
+
+        // 複数周期のsin/cosを合成してゆっくり変化するノイズ感を出す
+        const a = Math.sin(tickNorm * Math.PI * 4 + ph * Math.PI * 2) * 0.28;
+        const b = Math.sin(tickNorm * Math.PI * 11 + ph * Math.PI * 0.7) * 0.12;
+        const c = Math.cos(tickNorm * Math.PI * 7 - ph * Math.PI * 1.3) * 0.08;
+        // 基準を 0.72 に下げ、振れ幅を上方向に寄せる（0.24〜1.20 の範囲）
+        this._particleNoiseScale = 0.72 + a + b + c;
+    }
+
     _updateGridCubes(dt) {
+        if (this.useGPUWarp) {
+            this._updateGridCubesGPU(dt);
+        } else {
+            this._updateGridCubesCPU(dt);
+        }
+    }
+
+    /**
+     * GPU版（完全GPU）:
+     *   - 位置warp / 回転 / スケール : すべて頂点シェーダ（uniform更新のみ）
+     *   - CPU がやるのは uniform 同期と boost 属性の減衰反映だけ。
+     * → パーティクル数に対して CPU コストがほぼ定数（boost属性の配列走査のみ）。
+     */
+    _updateGridCubesGPU(dt) {
+        if (!this.instancedMeshManager) return;
+        this._syncWarpUniforms();
+
+        // track8 boost の減衰と aBoost 属性への反映のみ
+        const bm = this._cubeBoostMap;
+        const attr = this._boostAttr;
+        if (bm && attr) {
+            const arr = attr.array;
+            const decay = this._cubeBoostDecay * dt;
+            let dirty = false;
+            const n = bm.length;
+            for (let i = 0; i < n; i++) {
+                let v = bm[i];
+                if (v > 0) { v = Math.max(0, v - decay); bm[i] = v; }
+                if (arr[i] !== v) { arr[i] = v; dirty = true; }
+            }
+            if (dirty) attr.needsUpdate = true;
+        }
+        // instanceMatrix は恒等のまま（位置/回転/スケール全部シェーダ）
+    }
+
+    /**
+     * メイン/影マテリアルの uniform を JS の状態から同期する。
+     * ここが「パーティクル数に依らない定数コスト」の心臓部。
+     */
+    _syncWarpUniforms() {
+        const u = this._gpuWarpUniforms;
+        if (!u) return;
+        const ud = this._gpuWarpUniformsDepth;
+
+        const amp = this._warpAmp();
+        const morphA = MORPH_SHAPE_ID[this.morphShapes[this.morphCurrentIdx]] ?? 0;
+        const morphB = MORPH_SHAPE_ID[this.morphShapes[this.morphNextIdx]] ?? 0;
+
+        const set = (uni) => {
+            uni.uWarpAmp.value = amp;
+            uni.uTime.value = this.time;
+            uni.uBreath.value = this.idleBreathAmp;
+            uni.uGridCenterY.value = this.gridCenterY;
+            uni.uGridCenterZ.value = this.gridCenterZ;
+            uni.uGridFieldW.value = this.gridFieldW;
+            uni.uGridFieldH.value = this.gridFieldH;
+            uni.uMorphRadius.value = this.morphRadius;
+            uni.uMorphShapeA.value = morphA;
+            uni.uMorphShapeB.value = morphB;
+            uni.uMorphT.value = this.morphT;
+            uni.uNoiseScale.value = this._particleNoiseScale;
+
+            // warpPulses → (x, y, dir*amp, radius) + env=(life/maxLife)^2
+            const wp = this.warpPulses;
+            const wc = Math.min(wp.length, GRID_WARP_MAX_WARP_PULSES);
+            uni.uWarpCount.value = wc;
+            for (let i = 0; i < wc; i++) {
+                const p = wp[i];
+                uni.uWarpPulses.value[i].set(p.x, p.y, p.dir * p.amp, p.radius);
+                const k = p.life / p.maxLife;
+                uni.uWarpEnv.value[i] = k * k;
+            }
+
+            // implodePulses → (x, y, amp, radius) + env
+            const ip = this.implodePulses;
+            const ic = Math.min(ip.length, GRID_WARP_MAX_IMP_PULSES);
+            uni.uImpCount.value = ic;
+            for (let i = 0; i < ic; i++) {
+                const p = ip[i];
+                uni.uImpPulses.value[i].set(p.x, p.y, p.amp, p.radius);
+                const k = p.life / p.maxLife;
+                uni.uImpEnv.value[i] = k * k;
+            }
+        };
+
+        set(u);
+        if (ud) set(ud);
+    }
+
+    _updateGridCubesCPU(dt) {
         if (!this.instancedMeshManager || !this.gridBaseX) return;
         const t = this.time;
         const amp = this._warpAmp();
@@ -784,6 +1123,7 @@ export class Scene12 extends SceneBase {
         const pulseMax = this.pulseAmpMax * 2.0;
         const rotImpactScale = 0.0008;
         const angFriction = Math.exp(-1.8 * dt);
+        const noiseScale = this._particleNoiseScale;
         for (let i = 0; i < n; i++) {
             const p = this.particles[i];
             const bx = this.gridBaseX[i], by = this.gridBaseY[i];
@@ -812,12 +1152,14 @@ export class Scene12 extends SceneBase {
 
             p.updateRotation(dt);
 
+            // ノイズ係数（時間変化）を基準スケールに乗算、boostは更にその上に乗算
             if (bm && bm[i] > 0) {
                 bm[i] = Math.max(0, bm[i] - decay);
-                this._scaleScratch.copy(p.scale).multiplyScalar(1.0 + bm[i]);
+                this._scaleScratch.copy(p.scale).multiplyScalar(noiseScale * (1.0 + bm[i]));
                 this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, this._scaleScratch);
             } else {
-                this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, p.scale);
+                this._scaleScratch.copy(p.scale).multiplyScalar(noiseScale);
+                this.instancedMeshManager.setMatrixAt(i, p.position, p.rotation, this._scaleScratch);
             }
         }
         this.instancedMeshManager.markNeedsUpdate();
@@ -831,11 +1173,18 @@ export class Scene12 extends SceneBase {
         const t = this.time;
         const amp = this._warpAmp();
         const w = this._warpScratch;
-        // クロスの色相: ヒートマップ色相をベースに赤系オフセット
-        const crossHue = (this._heatHue + 0.95) % 1.0;
-        this._gridLineColorTmp.setHSL(crossHue, 0.9, 0.55);
-        const emissiveHue = (crossHue + 0.02) % 1.0;
-        const emissiveColor = this._gridLineColorTmp.clone().setHSL(emissiveHue, 1.0, 0.4);
+        const crossHue = 0.0;
+        this._gridLineColorTmp.setHSL(crossHue, 1.0, 0.5);
+        const emissiveColor = this._gridLineColorTmp.clone().setHSL(0.0, 1.0, 0.4);
+
+        // gridBoostをbaseX/baseYから最近傍グリッドインデックスで取得するヘルパー
+        // _cubeBoostMap はキューブ解像度(GPU時=cubeCols/Rows)なのでそれに合わせる
+        const cols = this.useGPUWarp ? this.cubeCols : this.gridCols;
+        const rows = this.useGPUWarp ? this.cubeRows : this.gridRows;
+        const hw = this.gridFieldW * 0.5;
+        const hh = this.gridFieldH * 0.5;
+        const bm = this._cubeBoostMap;
+
         for (const cross of this.crossPool) {
             if (!cross.visible || cross.userData.baseX === undefined) continue;
             this._gridWarp(cross.userData.baseX, cross.userData.baseY, amp, t, w);
@@ -849,6 +1198,16 @@ export class Scene12 extends SceneBase {
             }
             if (cross.userData.coreMat) {
                 cross.userData.coreMat.color.copy(this._gridLineColorTmp);
+            }
+
+            // track8 boostをcrossのscaleに乗算
+            if (bm && this.gridBaseX) {
+                const ci = Math.round((cross.userData.baseX + hw) / this.gridFieldW * (cols - 1));
+                const ri = Math.round((cross.userData.baseY - (this.gridCenterY - hh)) / this.gridFieldH * (rows - 1));
+                const idx = Math.max(0, Math.min(rows - 1, ri)) * cols + Math.max(0, Math.min(cols - 1, ci));
+                const boost = bm[idx] || 0;
+                const s = this._particleNoiseScale * (1.0 + boost);
+                cross.scale.setScalar(s);
             }
         }
     }
@@ -906,13 +1265,13 @@ export class Scene12 extends SceneBase {
         const cp = this.cameraParticles[this.currentCameraIndex];
         if (!cp) return;
         this.cameraParticles.forEach((p) => {
-            p.minDistance = 2000;
-            p.maxDistance = 4500;
+            p.minDistance = 3000;   // 2000 → 3000（グリッド拡大に合わせてカメラを引く）
+            p.maxDistance = 6800;   // 4500 → 6800
             p.boxMin = null;
             p.boxMax = null;
             p.maxSpeed = 8.0;
         });
-        const dist = 3000 + Math.random() * 3000;
+        const dist = 4500 + Math.random() * 4500;   // 3000+3000 → 4500+4500
         const yaw = (Math.random() - 0.5) * Math.PI * 0.55;
         const pitch = (Math.random() - 0.1) * 0.5;
         cp.position.set(
@@ -926,9 +1285,9 @@ export class Scene12 extends SceneBase {
     // ===== Scene09由来: カメラ =====
 
     setupCameraParticleDistance(cameraParticle) {
-        cameraParticle.minDistance = 2000;
-        cameraParticle.maxDistance = 4500;
-        cameraParticle.maxDistanceReset = 4000;
+        cameraParticle.minDistance = 3000;   // 2000 → 3000
+        cameraParticle.maxDistance = 6800;   // 4500 → 6800
+        cameraParticle.maxDistanceReset = 6000;   // 4000 → 6000
         cameraParticle.minY = STUDIO_FLOOR_TOP_Y + 200;
         cameraParticle.maxY = this.ceilingY - 200;
         cameraParticle.initializePosition?.();
@@ -1114,7 +1473,7 @@ export class Scene12 extends SceneBase {
             this._waveCurvePts[i].set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         }
         const curve = new THREE.CatmullRomCurve3(this._waveCurvePts, false, 'catmullrom', 0.5);
-        return new THREE.TubeGeometry(curve, n - 1, this.waveTubeRadius, 8, false);
+        return new THREE.TubeGeometry(curve, n - 1, this.waveTubeRadius, 5, false);   // 放射分割 8→5
     }
 
     _addVoice(note, velocity, track) {
@@ -1228,6 +1587,152 @@ export class Scene12 extends SceneBase {
         }
     }
 
+    // ===== track9: ブルーム・ブロッサム =====
+
+    /** 拡大リング用のメッシュプールと中心グローライトを構築 */
+    _buildBlossomRings() {
+        this._blossomGroup = new THREE.Group();
+        this.scene.add(this._blossomGroup);
+
+        // 平たいリング（地面と平行に寝かせる）。useBlossomFloorRing=false ならメッシュを作らない
+        if (this.useBlossomFloorRing) {
+            const ringGeo = new THREE.RingGeometry(0.86, 1.0, 96, 1);
+            for (let i = 0; i < this._blossomRingMax; i++) {
+                const mat = new THREE.MeshBasicMaterial({
+                    color: 0xffb3e6,
+                    transparent: true,
+                    opacity: 0.0,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                    side: THREE.DoubleSide,
+                    fog: false
+                });
+                const mesh = new THREE.Mesh(ringGeo, mat);
+                mesh.rotation.x = -Math.PI / 2;   // 地面に寝かせる
+                mesh.visible = false;
+                this._blossomGroup.add(mesh);
+                this._blossomRingPool.push({ mesh, mat, life: 0, maxLife: 1, maxScale: 1 });
+            }
+        }
+
+        // 中心の一時発光ライト（ドリームカラー）
+        this._blossomGlowLight = new THREE.PointLight(0xffc0f0, 0.0, 9000, 1.6);
+        this._blossomGlowLight.position.set(0, this.gridCenterY + 300, this.gridCenterZ);
+        this.scene.add(this._blossomGlowLight);
+    }
+
+    /**
+     * track9: 中心から発光リングが花開くように広がり、放射状にクロスが散る派手な演出。
+     * グリッド全体も波打たせ、色相を大きく蹴って画面が一瞬パッと明るくなる。
+     */
+    _fireBloomBurst(velocity, durationMs) {
+        const v = Math.max(0, Math.min(127, velocity)) / 127;
+
+        const cx = 0;
+        const cy = this.gridCenterY;
+        // 1) 拡大リングを2〜3枚、少し時間差で開かせる（useBlossomFloorRing=false なら出さない）
+        if (this.useBlossomFloorRing) {
+            const ringCount = 2 + (v > 0.6 ? 1 : 0);
+            for (let r = 0; r < ringCount; r++) {
+                const slot = this._blossomRingPool.find(s => !s.mesh.visible)
+                    || this._blossomRingPool[r % this._blossomRingPool.length];
+                slot.mesh.visible = true;
+                slot.mesh.position.set(cx, this.floorTopY + 40, this.gridCenterZ);
+                slot.mesh.scale.setScalar(120);
+                slot.life = slot.maxLife = 0.9 + v * 0.7 + r * 0.12;
+                slot.maxScale = (1600 + v * 2600) * (1 + r * 0.35);
+                // リングごとにドリームカラーを少しずらす（ピンク〜水色）
+                slot.mat.color.setHSL((0.9 - r * 0.18 + this._heatHue) % 1.0, 0.55, 0.72);
+                slot.mat.opacity = 0.9;
+            }
+        }
+
+        // 2) 中心グローをドリームカラーで焚く
+        this._blossomGlowLevel = Math.min(1.0, this._blossomGlowLevel + 0.7 + v * 0.5);
+        if (this._blossomGlowLight) {
+            this._blossomGlowLight.color.setHSL((0.9 + this._heatHue) % 1.0, 0.5, 0.7);
+        }
+
+        // 3) 放射状にクロス◆を撒く（花火）
+        const spokes = 6 + Math.floor(v * 6);
+        const spread = Math.min(this.gridFieldW, this.gridFieldH) * 0.32;
+        for (let s = 0; s < spokes; s++) {
+            const ang = (s / spokes) * Math.PI * 2 + this._rand() * 0.4;
+            const rad = spread * (0.4 + this._rand() * 0.6);
+            const bx = cx + Math.cos(ang) * rad;
+            const by = cy + Math.sin(ang) * rad;
+            this._spawnCrossAt(bx, by);
+        }
+
+        // 4) グリッド全体を波打たせ＋色相を大きく蹴る
+        this.gridWarpLevel = Math.min(2.0, this.gridWarpLevel + 0.6 + v * 0.8);
+        this.busLevel = Math.min(2.0, this.busLevel + 0.5 + v * 0.6);
+        this._fireWarpPulse(velocity, durationMs);
+        this._heatHue = (this._heatHue + 0.22 + this._rand() * 0.3) % 1.0;
+    }
+
+    /** 任意座標を最寄りの格子点座標へスナップする（マーカーを交差点に正確に乗せる） */
+    _snapToGridPoint(bx, by, out) {
+        const cols = this.useGPUWarp ? this.cubeCols : this.gridCols;
+        const rows = this.useGPUWarp ? this.cubeRows : this.gridRows;
+        const hw = this.gridFieldW * 0.5;
+        const hh = this.gridFieldH * 0.5;
+        // 連続座標 → 最寄り格子インデックス（キューブ生成時と同じ式の逆算）
+        let c = Math.round((bx + hw) / this.gridFieldW * (cols - 1));
+        let r = Math.round((by - (this.gridCenterY - hh)) / this.gridFieldH * (rows - 1));
+        c = Math.max(0, Math.min(cols - 1, c));
+        r = Math.max(0, Math.min(rows - 1, r));
+        // 格子インデックス → 格子点座標（キューブ生成時と完全に同じ式）
+        out.x = -hw + (this.gridFieldW * c) / (cols - 1);
+        out.y = this.gridCenterY - hh + (this.gridFieldH * r) / (rows - 1);
+        return out;
+    }
+
+    /** 座標指定でクロス◆を出す（_spawnCrossの座標指定版） */
+    _spawnCrossAt(bx, by) {
+        let cross = this.crossPool.find(c => !c.visible);
+        if (!cross) {
+            cross = this.crossPool[this._crossNext % this.crossPool.length];
+            this._crossNext++;
+        }
+        // 交差点にピッタリ乗せるため、最寄り格子点へスナップ
+        const snapped = this._snapToGridPoint(bx, by, this._warpScratch);
+        bx = snapped.x;
+        by = snapped.y;
+        cross.userData.baseX = bx;
+        cross.userData.baseY = by;
+        cross.position.set(bx, by, this.gridCenterZ + 120);
+        cross.rotation.set(this._rand() * Math.PI, this._rand() * Math.PI, this._rand() * Math.PI);
+        cross.userData.spin = 0.3 + this._rand() * 0.6;
+        cross.visible = true;
+        if (cross.userData.shellMat) cross.userData.shellMat.opacity = 0.85;
+        if (cross.userData.coreMat) cross.userData.coreMat.opacity = 0.95;
+    }
+
+    /** track9演出の毎フレーム更新（リング拡大フェード + グローライト減衰） */
+    _updateBloomBurst(dt) {
+        for (const slot of this._blossomRingPool) {
+            if (!slot.mesh.visible) continue;
+            slot.life -= dt;
+            if (slot.life <= 0) {
+                slot.mesh.visible = false;
+                slot.mat.opacity = 0;
+                continue;
+            }
+            const k = slot.life / slot.maxLife;       // 1→0
+            const grow = 1.0 - k;                     // 0→1
+            const scale = 120 + (slot.maxScale - 120) * (1 - k * k);  // イーズアウト拡大
+            slot.mesh.scale.setScalar(scale);
+            slot.mat.opacity = 0.9 * k * k;           // 広がりながらフェード
+        }
+
+        // 中心グローライト
+        if (this._blossomGlowLight) {
+            this._blossomGlowLevel *= Math.exp(-3.2 * dt);
+            this._blossomGlowLight.intensity = this._blossomGlowLevel * (600 + this.busLevel * 300);
+        }
+    }
+
     _buildNodeEdges() {
         const maxEdges = 512;
         this._nodeEdgeMax = maxEdges;
@@ -1289,24 +1794,20 @@ export class Scene12 extends SceneBase {
     _randomGridPoint() {
         const hw = this.gridFieldW * 0.5;
         const hh = this.gridFieldH * 0.5;
-        const ci = Math.floor(this._rand() * (this.gridFineCols + 1));
-        const ri = Math.floor(this._rand() * (this.gridFineRows + 1));
-        const x = -hw + (this.gridFieldW * ci) / this.gridFineCols;
-        const y = this.gridCenterY - hh + (this.gridFieldH * ri) / this.gridFineRows;
+        // マーカーはキューブ格子(cubeCols/Rows)の交点に乗せる（線のfine格子ではなくキューブ交差点に一致させる）
+        const cols = this.useGPUWarp ? this.cubeCols : this.gridCols;
+        const rows = this.useGPUWarp ? this.cubeRows : this.gridRows;
+        const ci = Math.floor(this._rand() * cols);
+        const ri = Math.floor(this._rand() * rows);
+        const x = -hw + (this.gridFieldW * ci) / (cols - 1);
+        const y = this.gridCenterY - hh + (this.gridFieldH * ri) / (rows - 1);
         return new THREE.Vector3(x, y, 0);
     }
 
-    /** 細グリッド交点にスナップ */
+    /** キューブ格子の交点にスナップ（マーカーを交差点に正確に乗せる） */
     _snapToGrid(x, y) {
-        const hw = this.gridFieldW * 0.5;
-        const hh = this.gridFieldH * 0.5;
-        const cellW = this.gridFieldW / this.gridFineCols;
-        const cellH = this.gridFieldH / this.gridFineRows;
-        let ci = Math.round((x + hw) / cellW);
-        let ri = Math.round((y - (this.gridCenterY - hh)) / cellH);
-        ci = Math.max(0, Math.min(this.gridFineCols, ci));
-        ri = Math.max(0, Math.min(this.gridFineRows, ri));
-        return new THREE.Vector3(-hw + ci * cellW, (this.gridCenterY - hh) + ri * cellH, 0);
+        const p = this._snapToGridPoint(x, y, this._warpScratch);
+        return new THREE.Vector3(p.x, p.y, 0);
     }
 
     /**
@@ -1389,27 +1890,37 @@ export class Scene12 extends SceneBase {
         if (this.initialized) return;
         await super.setup();
 
-        this.useSSAO = false;
+        this.useSSAO = false;   // 重いのでOFF
 
-        this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        // シャドウは enableShadows で独立制御（部屋を出しつつ影だけ切れる）
+        this.renderer.shadowMap.enabled = this.enableShadows;
+        this.renderer.shadowMap.type = THREE.PCFShadowMap;
         applyStudioRoomToneAndBackdrop(this.renderer, this.scene, this.sceneLightingScale, {
             useSceneFog: this.useSceneFog,
             sceneFogDensity: this.sceneFogDensity ?? 0.00009,
             sceneFogColor: this.sceneFogColor
         });
+        if (this.blackVoidMode) {
+            // 背景を真っ黒に。環境マップ由来の背景も消す
+            this.scene.background = new THREE.Color(0x000000);
+            this.scene.fog = null;
+        }
 
         this.camera.fov = 42;
         this.camera.near = 12;
         this.camera.far = 15000;
         this.camera.updateProjectionMatrix();
-        this.camera.position.set(0, this.gridCenterY, 4000);
+        this.camera.position.set(0, this.gridCenterY, 6000);   // 4000 → 6000（引き）
         this.camera.lookAt(0, this.gridCenterY, 0);
         this._centerSmoothed.set(0, this.gridCenterY, this.gridCenterZ);
 
         this._roomEnvPresentation = setupStudioRoomEnvironmentMap(this.renderer, this.scene);
         this.pmremGenerator = this._roomEnvPresentation.pmremGenerator;
         this._roomEnvTexture = this._roomEnvPresentation.envMapTexture;
+        if (this.blackVoidMode) {
+            // env設定が背景を書き換えることがあるので、背景だけ黒に確定（映り込み用のenvironmentは残す）
+            this.scene.background = new THREE.Color(0x000000);
+        }
 
         // Scene08と同じ設定
         const L = this.sceneLightingScale;
@@ -1419,22 +1930,28 @@ export class Scene12 extends SceneBase {
         });
         if (this.studio.studioBox) this.studio.studioBox.visible = false;
 
-        this.buildRoom();
+        if (!this.blackVoidMode) {
+            this.buildRoom();
 
-        this.studio.attachCeilingSpotRig(this.roomGroup, {
-            ...ceilingSpotRigOptionsForStudioRoom(L)
-        });
+            this.studio.attachCeilingSpotRig(this.roomGroup, {
+                ...ceilingSpotRigOptionsForStudioRoom(L)
+            });
 
-        if (this.roomGroup?.children.length >= 2) {
-            const floorMat = this.roomGroup.children[0].material;
-            const wallMat = this.roomGroup.children[1].material;
-            applyStudioRoomFloorWallEnvMaps(wallMat, floorMat);
+            if (this.roomGroup?.children.length >= 2) {
+                const floorMat = this.roomGroup.children[0].material;
+                const wallMat = this.roomGroup.children[1].material;
+                applyStudioRoomFloorWallEnvMaps(wallMat, floorMat);
+            }
+
+            this.setupLights();
+
+            // 蛍光灯をScene12の部屋四隅・天井近くに配置し直す
+            this._repositionFluorescentLamps();
+        } else {
+            // 真っ暗モード: 部屋/天井ライト/蛍光灯なし。
+            // キューブが見えるよう最小限のライト（Ambient+Hemi+Point）だけ足す（disposeは_minimalLights経路で片付く）
+            this.setupMinimalParticleLights();
         }
-
-        this.setupLights();
-
-        // 蛍光灯をScene12の部屋四隅・天井近くに配置し直す
-        this._repositionFluorescentLamps();
 
         // airNoiseVolume（空気ノイズ質感）だけ有効、チリは0で無効
         this.createAmbientFloatingParticles();
@@ -1443,8 +1960,8 @@ export class Scene12 extends SceneBase {
         this._applyEnvMapToSphereMaterial();
         this.createGridLines();
 
-        // ---- コールアウト ----
-        if (this.calloutSystem) {
+        // ---- コールアウト ---- (use3DCallouts=false なら丸ごとスキップ＝描画も更新も走らない)
+        if (this.use3DCallouts && this.calloutSystem) {
             this.calloutSystem.setScene(this.scene);
             this.calloutSystem.setUse3DCallouts(true);
             this.calloutSystem.scale3D = 2;
@@ -1464,9 +1981,17 @@ export class Scene12 extends SceneBase {
         this._buildCrossPool();
         this._buildNodeEdges();
         this._buildWaves();
+        this._buildBlossomRings();   // track9: ブルーム・ブロッサム
 
         this.setupCameraParticleDistances();
         this.initPostProcessing();
+
+        // 1フレーム目からGPUキューブ(uNoiseScale/uMorph等)とCPUクロス◆の warp を一致させるため、
+        // actual_tick=0 状態の値を先に計算してGPU uniformへ同期しておく（開始直後のズレ防止）。
+        this._updateParticleNoiseScale();
+        this._updateMorph();
+        this._syncWarpUniforms();
+
         this.initialized = true;
     }
 
@@ -1475,6 +2000,10 @@ export class Scene12 extends SceneBase {
     onUpdate(deltaTime) {
         if (!this.initialized) return;
         this.time += deltaTime;
+
+        // （actual_tick連動のグリッド増加は開始直後のズレ原因だったため一旦撤去。全行表示に戻す）
+        const rows = this.useGPUWarp ? this.cubeRows : this.gridRows;
+        this._visibleRows = rows;   // 常に全行表示
 
         this.currentVisibleCount = this.sphereCount;
         this.setParticleCount(this.sphereCount);
@@ -1488,14 +2017,11 @@ export class Scene12 extends SceneBase {
 
         this.gridWarpLevel *= Math.exp(-0.8 * deltaTime);
 
-        // ヒートマップ色相ランダムウォーク
-        this._heatHueVel += (this._heatHueTarget - this._heatHue) * 0.003 * deltaTime;
-        this._heatHueVel *= 0.92;
-        this._heatHue = (this._heatHue + this._heatHueVel + 1.0) % 1.0;
-        if (Math.abs(this._heatHue - this._heatHueTarget) < 0.02) {
-            this._heatHueTarget = Math.random();
-        }
+        // 色相ランダムウォークは無効。ただし track4 のキック分は毎フレーム 0 へ緩やかに減衰復帰させる
+        // （キック直後は色相がジャンプし、数フレームかけてベース色相へ戻る）
+        this._heatHue *= Math.exp(-0.6 * deltaTime);
 
+        this._updateParticleNoiseScale();
         this._updateMorph();
         this._updateWarpPulses(deltaTime);
         this._updateImplodePulses(deltaTime);
@@ -1505,6 +2031,7 @@ export class Scene12 extends SceneBase {
         this._updateGridCubes(deltaTime);
         this._updateGridLines();
         this._updateCrossesOnGround(deltaTime);
+        this._updateBloomBurst(deltaTime);   // track9: ブルーム・ブロッサム
 
         // NodeEdge: count=0で常時オフ
         if (this._nodeEdgeMesh) this._nodeEdgeMesh.count = 0;
@@ -1606,7 +2133,7 @@ export class Scene12 extends SceneBase {
                     const p = this._clusteredGridPoint(5);
                     bx = p.x; by = p.y;
                 }
-                const yOffset = 600 + this._rand() * 500;
+                const yOffset = 80 + this._rand() * 120;
                 const scratch = { x: 0, y: 0, z: 0 };
                 this._gridWarp(bx, by, this._warpAmp(), this.time, scratch);
                 const worldPos = new THREE.Vector3(scratch.x, scratch.y + yOffset, scratch.z);
@@ -1660,9 +2187,37 @@ export class Scene12 extends SceneBase {
             return;
         }
 
-        // track9: XYZへこみパルス
+
+        // track9: ブルーム・ブロッサム（拡大発光リング + 放射クロス + 中心グロー + 色相フラッシュ）
         if (trackNumber === 9) {
-            this._fireImplodePulse(velocity);
+            if (this.trackEffects[9]) {
+                this._fireBloomBurst(velocity, durationMs);
+            }
+            return;
+        }
+
+        // track3: インプロージョン（吸い込み）+ 全体を一瞬たわませる衝撃波
+        // → グリッドが「キュッ」と凹んで戻る、拍にハマる派手な動き。既存のimplode/warpを使うので軽い。
+        if (trackNumber === 3) {
+            if (this.trackEffects[3]) {
+                this._fireImplodePulse(velocity);
+                this.gridWarpLevel = Math.min(2.0, this.gridWarpLevel + (velocity / 127) * 0.9);
+                // 波形バスも一気に持ち上げてグリッド全体を揺らす
+                this.busLevel = Math.min(2.0, this.busLevel + (velocity / 127) * 0.8);
+            }
+            return;
+        }
+
+        // track4: 二連ウォープパルス（正逆両方向）で"パルス爆発"＋色相を一気に振る
+        // → 表と裏に押し出しが同時に走って弾ける。_heatHue を蹴ってライン/波形の色が跳ねる。
+        if (trackNumber === 4) {
+            if (this.trackEffects[4]) {
+                this._fireWarpPulse(velocity, durationMs);
+                this._fireWarpPulse(Math.min(127, velocity * 0.8), durationMs * 0.6);
+                this.gridWarpLevel = Math.min(2.0, this.gridWarpLevel + (velocity / 127) * 1.2);
+                // 色相をランダムに蹴る（ドリームコア寄りの色変化を演出）
+                this._heatHue = (this._heatHue + 0.13 + this._rand() * 0.22) % 1.0;
+            }
             return;
         }
 
@@ -1672,7 +2227,22 @@ export class Scene12 extends SceneBase {
             return;
         }
 
-        // それ以外（track2/3/4、/phase、/tick など）は親に委譲
+        // track2: 色反転（Scene12は duration 依存ではなく「瞬間的」に反転してすぐ戻す）
+        if (trackNumber === 2) {
+            if (this.trackEffects[2] && this.colorInversion && this.colorInversion.initialized) {
+                if (durationMs === 0 && args.length === 0) {
+                    // 引数なしはトグル（キーパッド等）— 従来通り
+                    this.colorInversion.setEnabled(!this.colorInversion.isEnabled());
+                    this.colorInversion.endTime = 0;
+                } else {
+                    // ノート受信時は duration を無視して固定の極短時間だけ反転（瞬間フラッシュ）
+                    this.colorInversion.apply(velocity, this.track2FlashMs);
+                }
+            }
+            return;
+        }
+
+        // それ以外（/phase、/tick など）は親に委譲
         super.handleOSC(message);
     }
 
@@ -1681,11 +2251,19 @@ export class Scene12 extends SceneBase {
 
     initPostProcessing() {
         setupPostEffectsPipeline(this, {
-            filmGrainIntensity: 1.4,
-            filmGrainGrayscale: false
+            filmGrainIntensity: 0.08,  // くすみの原因なのでさらに控えめに（0.2→0.08）
+            filmGrainGrayscale: false,
+            // DOFをシャープ寄りに（ボケ・滲みを弱める）
+            dofFocus: 2100,
+            dofAperture: 0.0000008,    // 0.0000012 → 0.0000008（ピント面を広げてボケ始めを遠ざける）
+            dofMaxBlur: 0.0016,        // 0.0028 → 0.0016（ボケ最大半径を縮めて全体シャープに）
+            // bloomはほぼ切る（滲みを最小限に）
+            bloomStrength: 0.05,       // 0.16 → 0.05（ほぼ消す）
+            bloomRadius: 0.6,          // 0.7 → 0.6
+            bloomThreshold: 0.75       // 0.6 → 0.75（かなり明るい所だけ僅かに滲む）
         });
         if (this.filmPass?.uniforms?.uColorNoise) {
-            this.filmPass.uniforms.uColorNoise.value = 0.75;
+            this.filmPass.uniforms.uColorNoise.value = 0.03;  // 0.1 → 0.03（色ノイズによる濁り除去）
         }
         attachStrobeFlashPass(this);
         this.applyTrackEffectsToPostPasses();
@@ -1762,6 +2340,21 @@ export class Scene12 extends SceneBase {
             this.collectiveGlowLight = null;
         }
 
+        // track9: ブルーム・ブロッサムの片付け
+        if (this._blossomGroup) {
+            this.scene.remove(this._blossomGroup);
+            for (const slot of this._blossomRingPool) {
+                slot.mesh.geometry?.dispose();
+                slot.mat?.dispose();
+            }
+            this._blossomRingPool = [];
+            this._blossomGroup = null;
+        }
+        if (this._blossomGlowLight) {
+            this.scene.remove(this._blossomGlowLight);
+            this._blossomGlowLight = null;
+        }
+
         if (this.ssaoPass && this.composer) {
             const idx = this.composer.passes.indexOf(this.ssaoPass);
             if (idx !== -1) this.composer.passes.splice(idx, 1);
@@ -1792,6 +2385,13 @@ export class Scene12 extends SceneBase {
             this.instancedMeshManager.dispose();
             this.instancedMeshManager = null;
         }
+        if (this._gpuDepthMaterial) {
+            this._gpuDepthMaterial.dispose();
+            this._gpuDepthMaterial = null;
+        }
+        this._gpuWarpUniforms = null;
+        this._gpuWarpUniformsDepth = null;
+        this._boostAttr = null;
         this.particles = [];
         this.gridBaseX = null;
         this.gridBaseY = null;

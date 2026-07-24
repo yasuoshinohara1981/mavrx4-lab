@@ -406,7 +406,7 @@ export class Scene12 extends SceneBase {
      * チャコールグレー〜黒寄りのランダム（岩・鉱物っぽい微妙な色相ブレ）
      */
     _setRandomRockCharcoalColor(out) {
-        const l = 0.12 + Math.random() * 0.22;
+        const l = 0.50 + Math.random() * 0.18;
         out.setHSL(0, 0, l);
     }
 
@@ -518,7 +518,8 @@ export class Scene12 extends SceneBase {
         }
         const flesh = generateFleshVeinTextures(512, { seed: 903 });
         const mat = new THREE.MeshStandardMaterial({
-            color: 0x888888,
+            color: 0xaaaaaa,
+            emissive: 0x1c1c1c,
             map: flesh.map,
             bumpMap: flesh.bumpMap,
             bumpScale: 4.0,
@@ -994,8 +995,8 @@ export class Scene12 extends SceneBase {
         v = Math.pow(v, 0.55);             // ガンマ<1: 低域をさらに持ち上げてマッピングをキツく
         // 青(0.60) → シアン → 緑 → 黄 → 赤(0.0)。_heatHue は使わない（七色回転を止める）
         const hue = (1.0 - v) * 0.60;
-        const l = 0.22 + v * 0.45;
-        const s = 0.75 + v * 0.25;
+        const l = 0.48 + v * 0.30;
+        const s = 0.85 + v * 0.15;
         this._gridLineColorTmp.setHSL(hue, s, l);
         out.r = this._gridLineColorTmp.r;
         out.g = this._gridLineColorTmp.g;

@@ -17,9 +17,10 @@ import { Scene10 } from '../scenes/scene10/Scene10.js';
 import { Scene11 } from '../scenes/scene11/Scene11.js';
 import { Scene12 } from '../scenes/scene12/Scene12.js';
 import { Scene13 } from '../scenes/scene13/Scene13.js';
+import { Scene14 } from '../scenes/scene14/Scene14.js';
 
 /** 登録シーン数 */
-export const SCENE_COUNT = 13;
+export const SCENE_COUNT = 14;
 /** シーンバンク数（[] で切替。1バンク=10スロット） */
 export const SCENE_BANK_COUNT = 2;
 /** 最大シーンスロット番号（0 始まりインデックスの上限） */
@@ -94,6 +95,9 @@ export class SceneManager {
             case 12:
                 scene = new Scene13(this.renderer, this.camera, this.sharedResourceManager);
                 break;
+            case 13:
+                scene = new Scene14(this.renderer, this.camera, this.sharedResourceManager);
+                break;
             default:
                 console.warn(`無効なシーンインデックス: ${index}`);
                 return null;
@@ -124,6 +128,7 @@ export class SceneManager {
             this.scenes.push(new Scene11(this.renderer, this.camera, this.sharedResourceManager));
             this.scenes.push(new Scene12(this.renderer, this.camera, this.sharedResourceManager));
             this.scenes.push(new Scene13(this.renderer, this.camera, this.sharedResourceManager));
+            this.scenes.push(new Scene14(this.renderer, this.camera, this.sharedResourceManager));
 
             this.currentSceneIndex = this.defaultSceneIndex;
             this.sceneBankIndex = Math.floor(this.currentSceneIndex / 10);

@@ -18,8 +18,8 @@ import { attachCanvasDragOrbit } from './lib/CanvasDragOrbit.js';
 // false: ライブモード（全てのシーンをプリロード）
 const IS_DEVELOPMENT_MODE = true;
 
-// デフォルトシーンのインデックス（0 = Scene01, … 11 = Scene12, 12 = Scene13）
-const DEFAULT_SCENE_INDEX = 11;
+// デフォルトシーンのインデックス（0 = Scene01, … 11 = Scene12, 12 = Scene13, 13 = Scene14）
+const DEFAULT_SCENE_INDEX = 13;
 
 // ============================================
 // 初期化
@@ -80,6 +80,23 @@ function applyAppCursorVisibility() {
 // レンダラーの初期化
 // ============================================
 
+/**
+ * 実際に使うピクセル比を決める。
+ * `?dpr=1`（等倍）や `?dpr=1.5` で明示指定でき、`?perf=1` なら自動で等倍にする。
+ * 指定が無ければ従来どおり devicePixelRatio を 2 でキャップ。
+ */
+function getPixelRatioCap() {
+    const q = new URLSearchParams(window.location.search);
+    const dpr = parseFloat(q.get('dpr'));
+    if (Number.isFinite(dpr) && dpr > 0) return Math.min(dpr, window.devicePixelRatio);
+    if (q.get('perf') === '1') return 1;
+    // 既定は 1.5 キャップ。2.0 だと画素数が 4 倍になり、ポスト処理の全パスがその倍率で走るため
+    // フルスクリーンでは fps が支配的に落ちる。1.5 なら画素数は約 44% 減。
+    // グレイン・走査線・クロマにじみが細部を潰すので、見た目の劣化はほぼ判別できない。
+    // 高精細で見たいときは `?dpr=2` で従来どおりにできる
+    return Math.min(window.devicePixelRatio, 1.5);
+}
+
 function initRenderer() {
     renderer = new THREE.WebGLRenderer({ 
         antialias: true,
@@ -87,8 +104,10 @@ function initRenderer() {
         preserveDrawingBuffer: true  // Canvas 2D で drawImage するために必要
     });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    // Retina 3x を 2x にキャップして軽量化（パフォーマンス優先）
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Retina 3x を 2x にキャップして軽量化（パフォーマンス優先）。
+    // ポスト処理は全パスがこの倍率で走るため、2x は画素数が 4 倍＝最も効く負荷要因。
+    // 画面録画（QuickTime 等）で fps が落ちるときは URL に `?dpr=1` を付けて等倍にする。
+    renderer.setPixelRatio(getPixelRatioCap());
     renderer.setClearColor(0x000000);
     /** シーンの setup より前からシャドウを有効化（全シーン共通） */
     renderer.shadowMap.enabled = true;
@@ -325,6 +344,17 @@ function handleKeyDown(e) {
         return;
     }
     
+    // F / V / B / N でGPUの重い要素を個別ON/OFF（プロファイル用。実装したシーンのみ）
+    // 用途: CPUが空いてるのにfpsが出ないとき、どのパスが原因かを実測で切り分ける
+    {
+        const gpuToggle = { f: 'shadow', v: 'dof', b: 'bloom', n: 'vhs' }[e.key?.toLowerCase()];
+        if (gpuToggle && typeof currentScene.toggleGpuFeature === 'function' && currentScene.profile) {
+            e.preventDefault();
+            currentScene.toggleGpuFeature(gpuToggle);
+            return;
+        }
+    }
+
     // h/HキーでHUDの位置・表示をサイクル（正方形→16:9→9:16→非表示→正方形…）
     if (e.key === 'h' || e.key === 'H') {
         e.preventDefault();
@@ -534,7 +564,16 @@ async function init() {
     _oscPending = [];
 
     window.addEventListener('resize', onWindowResize);
-    
+
+    // 同じタブでリロードすると遅くなる問題への対策。
+    // ページを離れるときに WebGL のリソースとコンテキストを明示的に解放する。
+    // 解放しないと、古いページのテクスチャ／レンダーターゲット／シャドウマップが
+    // GC されるまで VRAM に残り、新しいページのぶんと二重に確保された状態になる。
+    // 新しいタブで開くと（古いコンテキストが別ページに属するので）これが起きず速い。
+    window.addEventListener('pagehide', releaseGraphics);
+    window.addEventListener('beforeunload', releaseGraphics);
+
+
     // デフォルトでフルスクリーンにする
     // ユーザー操作が必要なため、少し遅延させる
     setTimeout(() => {
@@ -546,6 +585,29 @@ async function init() {
     
     // アニメーション開始
     animate();
+}
+
+let _graphicsReleased = false;
+
+/**
+ * WebGL のリソースとコンテキストを解放する（リロード時のVRAM二重確保を防ぐ）。
+ * `pagehide` と `beforeunload` の両方から呼ばれるので、二重実行を弾く。
+ */
+function releaseGraphics() {
+    if (_graphicsReleased) return;
+    _graphicsReleased = true;
+    try {
+        sceneManager?.getCurrentScene?.()?.dispose?.();
+    } catch (e) {
+        // 解放中のエラーで unload を止めない
+    }
+    try {
+        renderer?.dispose();
+        // forceContextLoss まで呼ぶと GPU 側のコンテキストが即座に手放される
+        renderer?.forceContextLoss?.();
+    } catch (e) {
+        /* 同上 */
+    }
 }
 
 // DOM読み込み後に初期化
